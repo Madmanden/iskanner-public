@@ -6,7 +6,6 @@ Built to replace a manual lookup workflow in a sterile services department. Staf
 
 It uses the camera, voice input, and manual entry to find part numbers quickly, with secure server-side OCR via Netlify Functions.
 
-This repository is **source-only**: it ships without private keys, production deployment settings, or hosted infrastructure. If you want a live deployment, follow the deployment section and connect it to your own Netlify account.
 
 ## Screenshots
 
