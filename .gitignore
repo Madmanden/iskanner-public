@@ -1,0 +1,25 @@
+.DS_Store
+# macOS system files
+.AppleDouble
+.LSOverride
+Icon
+
+# macOS generated directories
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Remote Apple Filesystem shares
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+
+# Node/Netlify
+node_modules/
+.env
+.netlify/

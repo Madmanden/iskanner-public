@@ -1,0 +1,3 @@
+reviews:
+  auto_review: false
+  enabled: true   # keeps CodeRabbit available, just not automatic

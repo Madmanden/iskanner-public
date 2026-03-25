@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+    <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+    <meta name="bingbot" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+    <meta name="referrer" content="no-referrer">
+    <title>Instrument skanner</title>
+    <meta name="theme-color" content="#3B82F6">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" href="/icons/icon-192.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/icons/icon-192.svg">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <link rel="stylesheet" href="css/styles.css?v=1.0">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="title-row">
+                <h1>Instrument skanner</h1>
+                <span class="version">V1.0</span>
+                <span id="offlineBadge" class="offline-badge hidden">Offline</span>
+            </div>
+        </header>
+        
+        <div class="result-section">
+            <div class="result-label">Placering</div>
+            <div class="result-content" id="result">
+                <div class="placeholder">Tryk "Skan" for kamerasøgning, "Tal" for stemmesøgning, eller skriv varenummeret.</div>
+            </div>
+        </div>
+        
+        <div class="camera-section">
+            <div class="camera-container">
+                <video id="video" autoplay playsinline muted></video>
+                <canvas id="canvas"></canvas>
+                <div class="camera-overlay"></div>
+            </div>
+            
+            <div class="controls">
+                <button id="scanBtn" class="btn-toggle">
+                    <span class="btn-icon" aria-hidden="true">📷</span>
+                    <span class="btn-label">Skan</span>
+                </button>
+                <button id="voiceBtn" class="btn-toggle">
+                    <span class="btn-icon" aria-hidden="true">🎤</span>
+                    <span class="btn-label">Tal</span>
+                </button>
+            </div>
+
+            <div class="manual-entry">
+                <input
+                    id="manualPartInput"
+                    type="text"
+                    placeholder="Skriv varenummer…"
+                    autocomplete="off"
+                    autocapitalize="characters"
+                    spellcheck="false"
+                />
+                <button id="manualSearchBtn" class="btn-search">
+                    <span class="btn-icon" aria-hidden="true">🔍</span>
+                    <span class="btn-label">Søg</span>
+                </button>
+            </div>
+
+            <div id="zoomControls" class="zoom-controls">
+                <label for="zoomSlider">Zoom</label>
+                <input id="zoomSlider" type="range" min="1" max="1" step="0.1" value="1" />
+            </div>
+            
+            <div class="status-wrapper">
+                <span id="status" class="status-indicator status-ready">Klar til scanning</span>
+            </div>
+        </div>
+        
+        <div class="history-section">
+            <button id="historyBtn" class="history-btn">
+                <span class="btn-icon" aria-hidden="true">📋</span>
+                <span class="btn-label">Historik</span>
+            </button>
+            <div id="historyList" class="history-list hidden"></div>
+        </div>
+    </div>
+
+    <!-- Login Modal -->
+    <div id="loginModal" class="login-modal hidden">
+        <div class="login-overlay"></div>
+        <div class="login-container">
+            <div class="login-header">
+                <h2>Log ind</h2>
+                <p>Indtast adgangskode for at bruge OCR-scanning</p>
+            </div>
+            <form id="loginForm" class="login-form">
+                <div class="form-group">
+                    <label for="passwordInput">Adgangskode</label>
+                    <input
+                        id="passwordInput"
+                        type="password"
+                        placeholder="Indtast adgangskode"
+                        autocomplete="current-password"
+                        required
+                    />
+                </div>
+                <div id="loginError" class="login-error hidden"></div>
+                <button type="submit" class="btn-login">
+                    <span class="btn-label">Log ind</span>
+                </button>
+            </form>
+            <div class="login-footer">
+                <p>Sessionen varer 30 dage på denne enhed</p>
+            </div>
+        </div>
+    </div>
+
+    <form
+        name="wrong-location-reports"
+        method="POST"
+        data-netlify="true"
+        netlify-honeypot="bot-field"
+        hidden
+    >
+        <input type="hidden" name="form-name" value="wrong-location-reports" />
+        <input type="text" name="bot-field" />
+        <input type="text" name="timestamp" />
+        <input type="text" name="partNumber" />
+        <input type="text" name="shownLocation" />
+        <input type="text" name="locationOrNote" />
+        <input type="text" name="source" />
+        <input type="text" name="userAgent" />
+    </form>
+    
+    <script src="parts-database.js"></script>
+    <script>
+        (function () {
+            try {
+                if ('serviceWorker' in navigator && navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+                    navigator.serviceWorker.getRegistrations().then(function (regs) {
+                        regs.forEach(function (reg) {
+                            try { reg.unregister(); } catch (e) {}
+                        });
+                    }).catch(function () {});
+                }
+            } catch (e) {}
+
+            try {
+                if ('caches' in window && window.caches && window.caches.keys) {
+                    window.caches.keys().then(function (keys) {
+                        return Promise.all(keys.map(function (k) { return window.caches.delete(k); }));
+                    }).catch(function () {});
+                }
+            } catch (e) {}
+        })();
+    </script>
+    <script type="module" src="js/app.js?v=1.0"></script>
+</body>
+</html>
