@@ -8,7 +8,7 @@ This repository is **source-only**: it ships without private keys, production de
 
 ## Screenshots
 
-<img src="screenshots/screenshot.jpg" alt="Instrument Scanner screenshot" width="400" />
+<img src="screenshots/screenshot.jpg" alt="Instrument Scanner screenshot" />
 
 ## Features
 
