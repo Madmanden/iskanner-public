@@ -2,6 +2,8 @@
 
 A mobile-optimized Progressive Web App (PWA) for scanning instrument part numbers and looking up their storage locations.
 
+Built to replace a manual lookup workflow in a sterile services department. Staff previously had to look up instrument storage locations on a PC and write them on post-its — for every single instrument. This app lets you point your phone camera at a part number and get the answer immediately.
+
 It uses the camera, voice input, and manual entry to find part numbers quickly, with secure server-side OCR via Netlify Functions.
 
 This repository is **source-only**: it ships without private keys, production deployment settings, or hosted infrastructure. If you want a live deployment, follow the deployment section and connect it to your own Netlify account.
@@ -16,7 +18,7 @@ This repository is **source-only**: it ships without private keys, production de
 - 🎤 **Voice Input** — say the part number aloud
 - ⌨️ **Manual Entry** — type part numbers directly
 - 📜 **History** — quick access to recent lookups, sortable by latest, location, or alphabetically
-- 🔍 **Fuzzy Matching** — suggests similar part numbers if there’s no exact match
+- 🔍 **Fuzzy Matching** — suggests similar part numbers if there's no exact match
 - 📱 **PWA** — install on your home screen
 - 🔒 **Secure** — API keys stay server-side via Netlify Functions
 - 🌐 **Offline Support** — service worker caching for offline use
@@ -185,7 +187,7 @@ OPENROUTER_OCR_MODELS=google/gemini-2.5-flash-lite
 **Login fails locally**
 - Use `npm run dev` instead of opening the HTML file directly
 
-**OCR doesn’t work**
+**OCR doesn't work**
 - Check that `HYPERBOLIC_API_KEY` is set
 - Add `OPENROUTER_API_KEY` if you want fallback OCR
 
