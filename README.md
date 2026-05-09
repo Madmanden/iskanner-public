@@ -14,7 +14,7 @@ It uses the camera, voice input, and manual entry to find part numbers quickly, 
 
 ## Features
 
-- 📷 **Camera OCR** — scan part numbers with your phone camera using Pixtral-12B (Hyperbolic) with automatic Gemini 2.5 Flash Lite fallback
+- 📷 **Camera OCR** — scan part numbers with your phone camera using Gemini 2.5 Flash Lite (OpenRouter) with optional Hyperbolic fallback
 - 🎤 **Voice Input** — Danish speech recognition with fuzzy DB matching for low-confidence reads
 - ⌨️ **Manual Entry** — type part numbers directly with auto-suggest
 - 🔍 **Fuzzy Matching** — suggests similar part numbers with character-swap correction (O↔0, I↔1, S↔5, B↔8, Z↔2, M↔O)
@@ -26,7 +26,7 @@ It uses the camera, voice input, and manual entry to find part numbers quickly, 
 - 🔑 **Authentication** — shared password protection with 30-day sessions and rate limiting
 - 📊 **Usage Stats** — optional monthly OCR usage tracking via Netlify Blobs
 
-## What's New (v1.4.0)
+## What's New (v1.0)
 
 - **M→O correction** — OCR often misreads O as M in EO-prefix part numbers; the scorer now tries the M→O variant and prefers the DB match without penalizing O as ambiguous
 - **Sharpness gating** — blurry images are rejected before any OCR call; very sharp images skip preprocessing to avoid artifacts
@@ -39,9 +39,10 @@ It uses the camera, voice input, and manual entry to find part numbers quickly, 
 ## Requirements
 
 - Node.js 18+
+- [Bun](https://bun.sh/) (for running tests)
 - [Netlify CLI](https://docs.netlify.com/cli/get-started/) (`npm install -g netlify-cli`)
-- A [Hyperbolic](https://app.hyperbolic.xyz/) API key for primary OCR
-- (Optional) An [OpenRouter](https://openrouter.ai/) API key for fallback OCR
+- A [OpenRouter](https://openrouter.ai/) API key for primary OCR (Gemini 2.5 Flash Lite)
+- (Optional) A [Hyperbolic](https://app.hyperbolic.xyz/) API key for fallback OCR
 - A Netlify account if you want to deploy
 
 ## Quick Start
@@ -63,20 +64,22 @@ cp .env.example .env
 Edit `.env` — at minimum set the OCR API key and a token secret:
 
 ```bash
-# Primary OCR provider (Pixtral-12B-2409 via Hyperbolic)
-HYPERBOLIC_API_KEY=your_hyperbolic_api_key_here
+# Primary OCR provider (Gemini 2.5 Flash Lite via OpenRouter)
+OPENROUTER_API_KEY=your_openrouter_api_key_here
 
 # Token secret for session signing
+# Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 AUTH_TOKEN_SECRET=your_secret_token_here
 
-# App password (optional in dev, required in production)
-AUTH_PASSWORD=change-me-in-production
-
-# Optional fallback OCR provider (Gemini 2.5 Flash Lite via OpenRouter)
-# OPENROUTER_API_KEY=your_openrouter_api_key_here
+# Optional fallback OCR provider (Pixtral-12B via Hyperbolic)
+# HYPERBOLIC_API_KEY=your_hyperbolic_api_key_here
 
 # Optional CORS restrictions
 # ALLOWED_ORIGINS=https://yourdomain.com
+
+# Optional: Netlify Blobs for usage stats
+# NETLIFY_SITE_ID=your_netlify_site_id_here
+# NETLIFY_BLOBS_TOKEN=your_netlify_blobs_token_here
 ```
 
 ### 3. Run locally
@@ -99,13 +102,15 @@ Open http://localhost:8888 in your browser.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `HYPERBOLIC_API_KEY` | Yes | Primary OCR provider API key |
+| `OPENROUTER_API_KEY` | Yes | Primary OCR provider API key (Gemini 2.5 Flash Lite) |
 | `AUTH_TOKEN_SECRET` | Yes | Secret for signing session tokens |
-| `OPENROUTER_API_KEY` | No | Fallback OCR provider API key |
-| `OCR_PRIMARY_PROVIDER` | No | Provider to use first (`hyperbolic` or `openrouter`) |
+| `HYPERBOLIC_API_KEY` | No | Fallback OCR provider API key (Pixtral-12B) |
+| `OCR_PRIMARY_PROVIDER` | No | Provider to use first (`openrouter` or `hyperbolic`) |
 | `OCR_FALLBACK_PROVIDER` | No | Fallback provider |
-| `HYPERBOLIC_OCR_MODELS` | No | Comma-separated model list for Hyperbolic |
 | `OPENROUTER_OCR_MODELS` | No | Comma-separated model list for OpenRouter |
+| `HYPERBOLIC_OCR_MODELS` | No | Comma-separated model list for Hyperbolic |
+| `OPENROUTER_HTTP_REFERER` | No | HTTP Referer header for OpenRouter |
+| `OPENROUTER_APP_NAME` | No | App name shown in OpenRouter dashboard |
 | `ALLOWED_ORIGINS` | No | Comma-separated allowed CORS origins |
 | `NETLIFY_SITE_ID` | No | Required for usage stats (Netlify Blobs) |
 | `NETLIFY_BLOBS_TOKEN` | No | Required for usage stats (Netlify Blobs) |
@@ -152,10 +157,10 @@ Edit `js/config.js` to tune:
 Control the provider chain with environment variables:
 
 ```bash
-OCR_PRIMARY_PROVIDER=hyperbolic       # or 'openrouter'
-OCR_FALLBACK_PROVIDER=openrouter      # or leave empty for no fallback
-HYPERBOLIC_OCR_MODELS=mistralai/Pixtral-12B-2409
+OCR_PRIMARY_PROVIDER=openrouter       # or 'hyperbolic'
+OCR_FALLBACK_PROVIDER=hyperbolic      # or leave empty for no fallback
 OPENROUTER_OCR_MODELS=google/gemini-2.5-flash-lite
+HYPERBOLIC_OCR_MODELS=mistralai/Pixtral-12B-2409
 ```
 
 The app tries attempts sequentially: raw image → preprocessed variants. On each attempt it:
@@ -203,7 +208,9 @@ The app tries attempts sequentially: raw image → preprocessed variants. On eac
 │   └── ocr-usage.js        # Monthly usage statistics endpoint
 ├── parts-database.js       # Part number → location mapping
 ├── tests/
+│   ├── fuzzy.test.js       # Fuzzy matching & correction tests
 │   ├── ocr.test.js         # OCR scoring & correction tests
+│   ├── utils.test.js       # Utility function tests
 │   └── voice.test.js       # Voice normalization tests
 ├── screenshots/
 │   └── screenshot.jpg      # App screenshot
@@ -235,9 +242,9 @@ The app tries attempts sequentially: raw image → preprocessed variants. On eac
 - Make sure `AUTH_TOKEN_SECRET` is set in your `.env` file
 
 **OCR returns no result**
-- Verify `HYPERBOLIC_API_KEY` is set correctly
+- Verify `OPENROUTER_API_KEY` is set correctly
 - Check the image is well-lit and in focus (the app now rejects blurry images with a clear message)
-- Add `OPENROUTER_API_KEY` for fallback OCR if Hyperbolic fails
+- Add `HYPERBOLIC_API_KEY` for fallback OCR if OpenRouter fails
 - Check Netlify Function logs for API error details
 
 **Voice input doesn't work in PWA**
@@ -246,9 +253,9 @@ The app tries attempts sequentially: raw image → preprocessed variants. On eac
 
 **Test failures**
 ```bash
-npm test
+bun test
 ```
-Runs the OCR scoring and voice normalization test suite.
+Runs the OCR scoring, voice normalization, fuzzy matching, and utilities test suite.
 
 ## License
 
