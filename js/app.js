@@ -3,6 +3,7 @@ import { initCameraElements, initCamera, stopCamera, resetCameraInactivityTimer,
 import { initUIElements, updateStatus, showError, setOverlayFeedbackEnabled, setOverlayScanning, removeOverlayScanning, displayResult, displaySearchResults, setOverlaySuccess, setOverlayError, saveToHistory } from './ui.js';
 import { initVoiceElements, initSpeechRecognition, isVoiceListening, stopVoiceRecognition, startVoiceRecognition } from './voice.js';
 import { initOCRElements, scanPartNumber, getLastOcrTimings, getLastOcrModelInfo } from './ocr.js';
+import { initLocalOCR, LOCAL_OCR_MODEL_LABEL } from './local-ocr.js';
 import { setButtonContents, lookupLocation, smartSearch } from './utils.js';
 import { isAuthenticated, login, getDaysUntilExpiry } from './auth.js';
 
@@ -11,6 +12,7 @@ let isScanning = false;
 
 function mapProviderLabel(providerUsed) {
     const key = String(providerUsed || '').toLowerCase();
+    if (key === 'local') return 'Lokal';
     if (key === 'hyperbolic') return 'Hyperbolic';
     if (key === 'openrouter') return 'OpenRouter';
     return providerUsed || null;
@@ -18,6 +20,7 @@ function mapProviderLabel(providerUsed) {
 
 function mapModelLabel(modelUsed) {
     if (!modelUsed) return null;
+    if (modelUsed === LOCAL_OCR_MODEL_LABEL) return LOCAL_OCR_MODEL_LABEL;
     if (modelUsed === 'mistralai/Pixtral-12B-2409') return 'Pixtral';
     if (modelUsed === 'nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16') return 'Nemotron';
     if (modelUsed === 'google/gemini-2.5-flash-lite') return 'Gemini 2.5 Flash Lite';
@@ -137,7 +140,10 @@ function init() {
     initUIElements(result, status, overlay, historyList, historyBtn);
     initVoiceElements(voiceBtn, overlay);
     initOCRElements(video, canvas, overlay);
-    
+
+    // Local OCR disabled — Tesseract accuracy on camera label images was insufficient.
+    // Re-enable by calling initLocalOCR() here when a better local model is available.
+
     // Fallback database if external file doesn't load
     if (typeof partsDatabase === 'undefined') {
         window.partsDatabase = {

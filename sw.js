@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cc-parts-scanner-v1.3.1';
+const CACHE_NAME = 'cc-parts-scanner-v1.4.0';
 
 const PRECACHE_URLS = [
   '/',
@@ -7,6 +7,7 @@ const PRECACHE_URLS = [
   '/js/app.js',
   '/js/camera.js',
   '/js/config.js',
+  '/js/local-ocr.js',
   '/js/ocr.js',
   '/js/ui.js',
   '/js/utils.js',

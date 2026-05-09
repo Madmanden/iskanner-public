@@ -5,11 +5,32 @@ import { findClosestPartNumber, lookupLocation } from './utils.js';
 import { getStream, getVideoTrack } from './camera.js';
 import { getToken } from './auth.js';
 import { isAndroid, OCR, sleep, clamp } from './utils.js';
+import { runLocalOCR, isLocalOCRReady, LOCAL_OCR_MODEL_LABEL } from './local-ocr.js';
 
 // Image preprocessing constants
-const PREPROCESS_TARGET_WIDTH = 640; // Optimal width for OCR
+const PREPROCESS_TARGET_WIDTH = 1100; // Optimal width for OCR (768–1280px recommended floor)
+
+// Safe performance.now() wrapper — falls back to Date.now() in contexts where
+// the Performance API is unavailable (older browsers, non-window environments).
+const perfNow = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+    ? () => performance.now()
+    : () => Date.now();
 const DEFAULT_PREPROCESSING = { contrastFactor: 1.4, brightnessOffset: 10 };
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+
+// Per-attempt OCR budgets, kept together so they can be tuned consistently with
+// the broader OCR timeout policy (for example `OCR.OCR_TIMEOUT_MS`) instead of
+// being embedded as magic numbers in retry logic.
+const OCR_ATTEMPT_TIMEOUT_MS = Object.freeze([
+    4500, // Initial attempt: allow the most time for the highest-quality pass.
+    3000, // First retry: reduce latency while still allowing a full OCR request.
+    2200  // Subsequent retries: favor responsiveness over completeness.
+]);
+
+function getAttemptTimeoutMs(attemptIndex) {
+    if (attemptIndex <= 0) return OCR_ATTEMPT_TIMEOUT_MS[0];
+    return OCR_ATTEMPT_TIMEOUT_MS[Math.min(attemptIndex, OCR_ATTEMPT_TIMEOUT_MS.length - 1)];
+}
 
 // ============================================================================
 // OCR Result Caching with Perceptual Hashing
@@ -369,13 +390,24 @@ function scorePartNumberCandidate(value) {
     if (/[0-9]/.test(v)) score += OCR.SCORE_HAS_DIGIT;
     if (v.length >= 3 && v.length <= 32) score += OCR.SCORE_LENGTH_VALID;
 
-    const ambiguous = (v.match(/[O0I1S5B8Z2]/g) || []).length;
-    score -= ambiguous * OCR.SCORE_AMBIGUOUS_CHAR_PENALTY;
-
+    let inDb = false;
     try {
         const location = lookupLocation(v);
-        if (location) score += OCR.SCORE_DATABASE_BONUS;
+        if (location) {
+            score += OCR.SCORE_DATABASE_BONUS;
+            inDb = true;
+        }
     } catch (e) {
+    }
+
+    // Only apply the ambiguous-char penalty when the candidate is not in the
+    // database. For DB matches the +100 bonus already signals confidence, and
+    // penalising O (which looks like 0) would otherwise bias the scorer toward
+    // non-O alternatives like M — causing EO-prefix parts to lose to same-
+    // numbered EM-prefix parts even when the OCR read is correct.
+    if (!inDb) {
+        const ambiguous = (v.match(/[O0I1S5B8Z2]/g) || []).length;
+        score -= ambiguous * OCR.SCORE_AMBIGUOUS_CHAR_PENALTY;
     }
 
     return score;
@@ -399,13 +431,16 @@ function normalizeAndCorrectOcrPartNumber(value) {
     const alphaToDigit = { O: '0', I: '1', S: '5', B: '8', Z: '2' };
     const digitToAlpha = { '0': 'O', '1': 'I', '5': 'S', '8': 'B', '2': 'Z' };
     const digitSwap = { '0': '1', '1': '0' };
+    // M is visually similar to O in some label fonts and is a common OCR misread.
+    const mToO = { M: 'O' };
 
-    const candidates = [
+    const candidates = [...new Set([
         normalized,
         applyCharMap(normalized, alphaToDigit),
         applyCharMap(normalized, digitToAlpha),
-        applyCharMap(normalized, digitSwap)
-    ];
+        applyCharMap(normalized, digitSwap),
+        applyCharMap(normalized, mToO)
+    ])];
 
     let best = normalized;
     let bestScore = scorePartNumberCandidate(best);
@@ -686,17 +721,26 @@ async function prepareOcrAttempt(attempt, params) {
         0, 0, canvasEl.width, canvasEl.height
     );
 
+    // Compute sharpness on the raw frame before any preprocessing.
+    // This gates both the blurry-image rejection and the early-exit check below.
+    const sharpnessScore = computeSharpnessScore(canvasEl);
+    if (sharpnessScore < OCR.SHARPNESS_MIN_THRESHOLD) {
+        return { success: false, error: 'Too blurry', sharpness: sharpnessScore };
+    }
+
+    // If the raw image is already very sharp, skip preprocessed variants entirely.
+    // Applying contrast/sharpen to an already-sharp image adds artifacts that hurt
+    // vision model accuracy; the raw attempt handles these cases better.
+    if (preprocess !== false && sharpnessScore > OCR.SHARPNESS_EARLY_EXIT) {
+        return { success: false, error: 'Skipped: high sharpness, raw preferred', sharpness: sharpnessScore };
+    }
+
     if (preprocess !== false) {
         preprocessImage(canvasEl, ctxEl);
     }
 
     if (thresholded) {
         applyOtsuThreshold(canvasEl, ctxEl);
-    }
-
-    const sharpnessScore = computeSharpnessScore(canvasEl);
-    if (sharpnessScore < OCR.SHARPNESS_MIN_THRESHOLD) {
-        return { success: false, error: 'Too blurry', sharpness: sharpnessScore };
     }
 
     const encoded = encodeJpegAdaptive(canvasEl, JPEG_QUALITY, MAX_IMAGE_SIZE_BYTES);
@@ -788,7 +832,7 @@ export async function scanPartNumber() {
 
         const attempts = OCR_ATTEMPTS || [];
 
-        console.log('[OCR] Starting parallel scan with', attempts.length, 'attempts');
+        console.log('[OCR] Preparing', attempts.length, 'attempt variants from frame');
 
         // Step 1: Prepare all attempts in parallel (preprocessing is CPU-bound)
         const preparedAttempts = await Promise.all(
@@ -799,64 +843,58 @@ export async function scanPartNumber() {
             }))
         );
 
-        // Step 2: Find sharpest images that were successfully preprocessed
+        // Step 2: Filter to successfully prepared attempts, preserving config order.
+        // Intentional order: raw → pre (least to most aggressive processing).
+        // Do NOT sort by sharpness — that always promotes the preprocessed image
+        // to the front, ahead of the raw image.
         const validAttempts = preparedAttempts
             .map((result, index) => ({ ...result, index }))
-            .filter(r => r.success)
-            .sort((a, b) => b.sharpness - a.sharpness);
+            .filter(r => r.success);
 
         if (validAttempts.length === 0) {
-            const blurErrors = preparedAttempts.filter(r => !r.success);
-            console.log('[OCR] All attempts failed:', blurErrors.map(e => e.error));
-            showError('Billedet er for uskarpt. Hold kameraet mere stabilt.');
+            const failedAttempts = preparedAttempts.filter(r => !r.success);
+            console.log('[OCR] All attempts failed:', failedAttempts.map(e => e.error));
+            const allBlurry = failedAttempts.every(r => r.error === 'Too blurry');
+            showError(allBlurry
+                ? 'Billedet er for uskarpt. Hold kameraet stabilt og fyld rammen med etiketten.'
+                : 'Scanning fejlede. Prøv igen.');
             setOverlayError();
             return;
         }
 
-        // Step 3: Send top 2 attempts to OCR in parallel (network-bound)
-        const topAttempts = validAttempts.slice(0, Math.min(2, validAttempts.length));
-        
-        console.log('[OCR] Sending', topAttempts.length, 'attempts to OCR (parallel)');
+        console.log('[OCR] Sending up to', validAttempts.length, 'attempts sequentially (early-exit on success)');
 
         let partNumber = '';
         let ocrRaw = '';
-        let attemptResults = [];
         let ocrSuccess = false;
+        const ocrResults = [];
+        const topAttempts = validAttempts; // alias kept for debug summary below
 
-        const ocrPromises = topAttempts.map(async (attemptData) => {
-            if (scanToken !== activeScanToken) return null;
-            
-            const ocrStartTime = performance.now();
+        // Step 3: Fire attempts one at a time. Stop as soon as one returns a valid part number.
+        // This avoids paying for a second API call when the first already succeeded.
+        for (const attemptData of validAttempts) {
+            if (scanToken !== activeScanToken) return;
+
+            const ocrStartTime = perfNow();
+            let result;
             try {
                 const ocrResponse = await performOCR(
                     attemptData.base64,
                     activeOcrController,
-                    OCR_DEBUG_ENABLED ? attemptData : null
+                    OCR_DEBUG_ENABLED ? attemptData : null,
+                    getAttemptTimeoutMs(attemptData.index)
                 );
-                const ocrNetworkMs = Math.round(performance.now() - ocrStartTime);
-                
-                return {
-                    ...attemptData,
-                    ocrResponse,
-                    ocrNetworkMs
-                };
+                result = { ...attemptData, ocrResponse, ocrNetworkMs: Math.round(perfNow() - ocrStartTime) };
             } catch (e) {
-                return {
-                    ...attemptData,
-                    ocrResponse: null,
-                    error: e.message,
-                    ocrNetworkMs: Math.round(performance.now() - ocrStartTime)
-                };
+                result = { ...attemptData, ocrResponse: null, error: e.message, ocrNetworkMs: Math.round(perfNow() - ocrStartTime) };
             }
-        });
+            ocrResults.push(result);
 
-        const ocrResults = await Promise.all(ocrPromises);
+            if (!result.ocrResponse || !result.ocrResponse.partNumber) {
+                console.log(`  ✗ Attempt ${result.index} (${result.attemptMode}): No part number returned`);
+                continue;
+            }
 
-        // Step 4: Process results in order
-        for (const result of ocrResults) {
-            if (scanToken !== activeScanToken) return;
-            if (!result.ocrResponse || !result.ocrResponse.partNumber) continue;
-            
             const rawPartNumber = result.ocrResponse.partNumber;
             const normalized = normalizeOcrPartNumber(rawPartNumber);
             const corrected = normalizeAndCorrectOcrPartNumber(normalized);
@@ -868,17 +906,11 @@ export async function scanPartNumber() {
             if (finalPartNumber && isLikelyPartNumber(finalPartNumber)) {
                 partNumber = finalPartNumber;
                 ocrRaw = rawPartNumber || '';
-                lastOcrNetworkMs += result.ocrNetworkMs;
-                lastOcrPayloadBytes += result.approxBytes || 0;
-                lastOcrNetworkCalls++;
                 ocrSuccess = true;
-
-                // Update model info from successful response
                 if (result.ocrResponse.providerUsed) lastOcrProviderUsed = result.ocrResponse.providerUsed;
                 if (result.ocrResponse.modelUsed) lastOcrModelUsed = result.ocrResponse.modelUsed;
                 lastOcrProviderFallbackUsed = !!result.ocrResponse.providerFallbackUsed;
                 lastOcrModelFallbackUsed = !!result.ocrResponse.fallbackUsed;
-
                 console.log(`  ✓ Attempt ${result.index} (${result.attemptMode}): ${partNumber} (raw: ${ocrRaw})`);
                 break;
             } else {
@@ -891,7 +923,22 @@ export async function scanPartNumber() {
         lastOcrPayloadBytes = ocrResults.reduce((sum, r) => sum + (r.approxBytes || 0), 0);
         lastOcrNetworkCalls = ocrResults.filter(r => r.ocrResponse).length;
 
-        console.log('[OCR] Completed parallel scan | success:', ocrSuccess);
+        console.log('[OCR] Scan complete | attempts fired:', ocrResults.length, '| success:', ocrSuccess);
+
+        if (OCR_DEBUG_ENABLED && topAttempts.length > 0) {
+            const best = topAttempts[0];
+            console.log('[OCR DEBUG] scan summary', {
+                cropW: best.sourceW,
+                cropH: best.sourceH,
+                sentW: best.targetW,
+                sentH: best.targetH,
+                fileSizeKB: Math.round((best.approxBytes || 0) / 1024),
+                model: lastOcrModelUsed || '(pending)',
+                result: ocrSuccess ? partNumber : '(none)',
+                apiCalls: lastOcrNetworkCalls,
+                networkMs: lastOcrNetworkMs
+            });
+        }
 
         if (scanToken !== activeScanToken) return;
 
@@ -960,18 +1007,72 @@ export async function scanPartNumber() {
     }
 }
 
-async function performOCR(base64Image, controller, debugMeta) {
-    const startedAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
-        ? performance.now()
-        : Date.now();
+async function performOCR(base64Image, controller, debugMeta, timeoutOverrideMs) {
+    // --- Local OCR: try browser-side inference first (free, no network) ---
+    if (isLocalOCRReady()) {
+        try {
+            const localRaw = await runLocalOCR(base64Image);
+            if (localRaw) {
+                // Florence-2 <OCR> returns full-image text — tokenize and collect all DB hits.
+                // Only accept when exactly one distinct DB match exists; 2+ hits are ambiguous
+                // (any incidental token matching a DB key would return the wrong part number).
+                const rawTokens = extractPotentialPartNumbers(localRaw);
+                const dbHits = new Set();
+                for (const tok of rawTokens) {
+                    const corrected = normalizeAndCorrectOcrPartNumber(tok) || normalizeOcrPartNumber(tok);
+                    if (!corrected) continue;
+                    try { if (lookupLocation(corrected)) dbHits.add(corrected); } catch (_e) {}
+                }
 
-    const timeoutMs = OCR.OCR_TIMEOUT_MS;
+                if (dbHits.size === 1) {
+                    const candidate = [...dbHits][0];
+                    console.log('[OCR] Local model unambiguous DB hit:', candidate);
+                    lastOcrProviderUsed = 'local';
+                    lastOcrModelUsed = LOCAL_OCR_MODEL_LABEL;
+                    lastOcrProviderFallbackUsed = false;
+                    lastOcrModelFallbackUsed = false;
+                    return {
+                        partNumber: candidate,
+                        providerUsed: 'local',
+                        modelUsed: LOCAL_OCR_MODEL_LABEL,
+                        providerFallbackUsed: false,
+                        fallbackUsed: false,
+                    };
+                }
+
+                const reason = dbHits.size > 1 ? `ambiguous (${dbHits.size} DB hits)` : 'no DB match';
+                console.log('[OCR] Local model', reason, '— falling back to cloud');
+            }
+        } catch (localErr) {
+            console.warn('[OCR] Local OCR error, falling back to cloud:', localErr && localErr.message ? localErr.message : localErr);
+        }
+    }
+
+    // --- Cloud OCR fallback ---
+
+    // Use a dedicated per-call AbortController for the timeout so that a timeout
+    // on one attempt does NOT abort the shared scan controller and kill later attempts.
+    const timeoutMs = Number.isFinite(timeoutOverrideMs) && timeoutOverrideMs > 0
+        ? timeoutOverrideMs
+        : OCR.OCR_TIMEOUT_MS;
     let timedOut = false;
+    const perCallController = new AbortController();
+
+    // Forward scan-level cancellation (activeOcrController) into the per-call controller.
+    let cancelListener = null;
+    if (controller && controller.signal) {
+        cancelListener = () => perCallController.abort();
+        controller.signal.addEventListener('abort', cancelListener);
+    }
+
+    // Combine per-call timeout + scan cancellation into a single fetch signal.
+    const fetchSignal = (typeof AbortSignal !== 'undefined' && typeof AbortSignal.any === 'function')
+        ? AbortSignal.any([perCallController.signal, ...(controller ? [controller.signal] : [])])
+        : perCallController.signal;
+
     const timeoutId = setTimeout(() => {
         timedOut = true;
-        try {
-            if (controller && typeof controller.abort === 'function') controller.abort();
-        } catch (e) {}
+        try { perCallController.abort(); } catch (e) {}
     }, timeoutMs);
 
     let response;
@@ -993,7 +1094,7 @@ async function performOCR(base64Image, controller, debugMeta) {
                 debug: OCR_DEBUG_ENABLED,
                 debugMeta: debugMeta || undefined
             }),
-            signal: controller ? controller.signal : undefined
+            signal: fetchSignal
         });
     } catch (e) {
         if (timedOut) {
@@ -1002,6 +1103,9 @@ async function performOCR(base64Image, controller, debugMeta) {
         throw e;
     } finally {
         clearTimeout(timeoutId);
+        if (controller && controller.signal && cancelListener) {
+            controller.signal.removeEventListener('abort', cancelListener);
+        }
     }
 
     if (!response.ok) {

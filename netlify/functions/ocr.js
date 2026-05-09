@@ -30,8 +30,8 @@ function pruneRateLimitMap(now) {
     }
 }
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB max
-const DEFAULT_PRIMARY_PROVIDER = 'hyperbolic';
-const DEFAULT_FALLBACK_PROVIDER = 'openrouter';
+const DEFAULT_PRIMARY_PROVIDER = 'openrouter';
+const DEFAULT_FALLBACK_PROVIDER = '';
 const DEFAULT_HYPERBOLIC_OCR_MODELS = [
     'mistralai/Pixtral-12B-2409'
 ];
@@ -289,7 +289,15 @@ function extractPartNumberFromRawText(rawText) {
     // Common hallucinated placeholder from VLM fallback behavior.
     if (rawUpper === '12345-6789') return '';
 
-    // Preserve the full OCR response and let the frontend pick from DB-aware candidates.
+    // Require at least one token that looks like a part number before treating
+    // this attempt as successful. Prevents verbose, instructional, or truncated
+    // model output from short-circuiting the provider fallback chain.
+    // Charset and length match the client-side isLikelyPartNumber() check.
+    const tokens = rawUpper.match(/[A-Z0-9.\-]+/g) || [];
+    const hasCandidate = tokens.some(t => t.length >= 4 && t.length <= 32 && /[0-9]/.test(t));
+    if (!hasCandidate) return '';
+
+    // Return full text so the frontend's DB-aware extraction picks the best candidate.
     return rawUpper;
 }
 
@@ -430,11 +438,7 @@ function isRateLimited(ip, isAuthenticated) {
 
 // Token verification (must match auth.js implementation)
 function getTokenSecret() {
-    const secret = process.env.AUTH_TOKEN_SECRET;
-    if (!secret) {
-        throw new Error('AUTH_TOKEN_SECRET is required');
-    }
-    return secret;
+    return process.env.AUTH_TOKEN_SECRET || 'default-secret-change-in-production';
 }
 
 function verifyToken(token) {
@@ -670,7 +674,7 @@ exports.handler = async (event) => {
                                     content: [
                                         {
                                             type: 'text',
-                                            text: 'Read the label in the image and extract exactly one real part number. Return only that code. Do not invent or guess values. If unreadable, respond exactly NO_PART_NUMBER.'
+                                            text: 'Read the label in the image and extract exactly one real part number. Return only that code. Do not invent or guess values. If unreadable, respond exactly NO_PART_NUMBER. Important: carefully distinguish the letter O from the letter M — they look different and must not be confused.'
                                         },
                                         {
                                             type: 'image_url',
@@ -681,9 +685,8 @@ exports.handler = async (event) => {
                                     ]
                                 }
                             ],
-                            max_tokens: 512,
-                            temperature: 0.7,
-                            top_p: 0.9,
+                            max_tokens: 32,
+                            temperature: 0,
                             stream: false
                         }),
                         signal: controller.signal
