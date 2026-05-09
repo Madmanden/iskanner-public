@@ -83,8 +83,8 @@ export const OCR = {
     SHARPEN_AMOUNT_ANDROID: 0.15,
     SHARPEN_AMOUNT_DEFAULT: 0.30,
     
-    // Crop adjustment (-4% shifts crop upward to center text vertically)
-    CROP_Y_BIAS: -0.04,
+    // Crop adjustment (0 keeps crop centered on the visible overlay)
+    CROP_Y_BIAS: 0,
     
     // Inner padding around crop area (8% on each side)
     CROP_INNER_PADDING: 0.08,

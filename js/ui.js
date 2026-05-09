@@ -280,11 +280,7 @@ export function setOverlaySuccess() {
 
     if (!overlayFeedbackEnabled) return;
 
-    try {
-        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-            navigator.vibrate(25);
-        }
-    } catch (e) {}
+    triggerSuccessHaptic();
 
     overlayEl.classList.remove('scanning');
     overlayEl.classList.remove('overlay-error');
@@ -293,6 +289,14 @@ export function setOverlaySuccess() {
     overlayFeedbackTimeoutId = setTimeout(() => {
         overlayEl.classList.remove('success');
     }, OVERLAY_FEEDBACK_MS);
+}
+
+function triggerSuccessHaptic() {
+    try {
+        if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
+        // Slightly more noticeable than a single short pulse.
+        navigator.vibrate([20, 30, 20]);
+    } catch (e) {}
 }
 
 export function setOverlayError() {
