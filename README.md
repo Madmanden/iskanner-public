@@ -15,7 +15,7 @@ Use your phone camera, voice, or manual entry to find the right location quickly
 - 📷 **Camera OCR** — scan part numbers with your phone camera using Gemini 2.5 Flash Lite through OpenRouter, with optional Hyperbolic fallback
 - 🎤 **Voice input** — Danish speech recognition with fuzzy matching for low-confidence reads
 - ⌨️ **Manual entry** — type part numbers directly with auto-suggest
-- 🔍 **Fuzzy correction** — handles common character swaps like `O ↔ 0`, `I ↔ 1`, and `S ↔ 5`
+- 🔍 **Fuzzy search and correction** — finds close part-number matches and handles common character swaps like `O ↔ 0`, `I ↔ 1`, and `S ↔ 5`
 - 🧠 **Optional local OCR** — browser-side OCR via Florence-2 when you want an offline-capable fallback
 - 📜 **Lookup history** — revisit recent searches and sort them by latest, location, or alphabetically
 - 📱 **Installable PWA** — add it to a home screen for a native-like experience
@@ -23,16 +23,6 @@ Use your phone camera, voice, or manual entry to find the right location quickly
 - 🌐 **Offline support** — service worker caching keeps the core app available offline
 - 🔑 **Authentication** — shared password protection with 30-day sessions and rate limiting
 - 📊 **Usage stats** — optional monthly OCR usage tracking via Netlify Blobs
-
-## What’s New
-
-- **M→O correction** — the scorer now tries the `M → O` variant for EO-prefix part numbers and prefers the database match when it is stronger
-- **Sharpness gating** — blurry images are rejected before any OCR call, while very sharp images skip extra preprocessing
-- **Sequential OCR attempts** — attempts run one at a time and stop as soon as a valid result is found
-- **Per-attempt timeouts** — the first attempt gets 4.5s, then retries shorten to 3s and 2.2s
-- **Improved voice recognition** — unified normalization, DSP audio stream activation, fuzzy matching for low-confidence transcripts, and noise rejection
-- **Auth hardening** — authentication is configured explicitly through `AUTH_PASSWORD`, with no built-in default password shipped
-- **Database growth** — hundreds of new part numbers and storage locations have been added
 
 ## Requirements
 
