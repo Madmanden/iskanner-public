@@ -33,7 +33,7 @@ It uses the camera, voice input, and manual entry to find part numbers quickly, 
 - **Sequential OCR attempts** — attempts fire one at a time and stop at the first successful result, avoiding unnecessary API calls
 - **Per-attempt timeouts** — initial attempt gets 4.5s, retries get progressively shorter (3s → 2.2s)
 - **Improved voice recognition** — unified rule-based normalization, DSP audio stream activation, fuzzy DB matching for low-confidence transcripts, noise transcript rejection
-- **Auth hardening** — `AUTH_PASSWORD` is no longer strictly required in dev; falls back to `AUTH_TOKEN_SECRET` default in production checks
+- **Auth hardening** — authentication is configured explicitly through `AUTH_PASSWORD`; no built-in default password is shipped
 - **Database growth** — hundreds of new part numbers and location entries
 
 ## Requirements
@@ -119,9 +119,9 @@ Open http://localhost:8888 in your browser.
 
 ### Authentication
 
-The app uses a shared password with 30-day sessions:
+The app uses a shared password configured through `AUTH_PASSWORD`:
 
-- **Default password:** `AUTH_PASSWORD` (change in `netlify/functions/auth.js` if needed)
+- **Password source:** `AUTH_PASSWORD` in your environment or `.env` file
 - **Session duration:** 30 days per device
 - **Rate limiting:** 50 OCR requests/min for authenticated users; unauthenticated users have no OCR access
 - **Login prompt:** Appears automatically on first use
@@ -166,7 +166,7 @@ HYPERBOLIC_OCR_MODELS=mistralai/Pixtral-12B-2409
 The app tries attempts sequentially: raw image → preprocessed variants. On each attempt it:
 1. Checks sharpness (rejects blurry images immediately)
 2. Attempts local OCR (Florence-2) in-browser if loaded
-3. Falls back to the cloud provider chain (Hyperbolic → OpenRouter)
+3. Falls back to the cloud provider chain (OpenRouter → Hyperbolic, or whatever you configure in `netlify/functions/ocr.js`)
 4. Returns the first valid part number found
 
 ## Usage
@@ -198,17 +198,19 @@ The app tries attempts sequentially: raw image → preprocessed variants. On eac
 │   ├── camera.js           # Camera capture & cropping
 │   ├── config.js           # App configuration constants
 │   ├── local-ocr.js        # Browser-side OCR (Florence-2, optional)
+│   ├── ocr-selection.js    # EM/EO sibling selection helpers for OCR consensus
 │   ├── ocr.js              # OCR pipeline (cloud + local)
 │   ├── ui.js               # DOM updates & haptics
 │   ├── utils.js            # Helpers: part number normalization, scoring, DB lookup
 │   └── voice.js            # Speech recognition (Danish)
 ├── netlify/functions/
 │   ├── auth.js             # Auth endpoint (login + session verification)
-│   ├── ocr.js              # Serverless OCR proxy (Hyperbolic → OpenRouter fallback)
+│   ├── ocr.js              # Serverless OCR proxy (OpenRouter → Hyperbolic fallback)
 │   └── ocr-usage.js        # Monthly usage statistics endpoint
 ├── parts-database.js       # Part number → location mapping
 ├── tests/
 │   ├── fuzzy.test.js       # Fuzzy matching & correction tests
+│   ├── ocr-selection.test.js # EM/EO OCR consensus tests
 │   ├── ocr.test.js         # OCR scoring & correction tests
 │   ├── utils.test.js       # Utility function tests
 │   └── voice.test.js       # Voice normalization tests

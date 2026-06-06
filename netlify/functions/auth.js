@@ -3,23 +3,10 @@
 
 const crypto = require('crypto');
 
-// Password for accessing the app. MUST be set via environment variable in production!
-// Generate with: node -e "console.log(require('crypto').randomBytes(16).toString('hex'))"
-const SHARED_PASSWORD = process.env.AUTH_PASSWORD;
-
-// Validate that AUTH_PASSWORD is set in production
-if (!SHARED_PASSWORD) {
-    if (process.env.NODE_ENV === 'production' || process.env.URL) {
-        // Only fail in actual Netlify deployment, not local dev
-        if (typeof require !== 'undefined' && require.main === require('./auth')) {
-            console.error('[Auth] ERROR: AUTH_PASSWORD environment variable is not set!');
-            console.error('[Auth] Please set AUTH_PASSWORD before deploying to production.');
-        }
-    }
-}
-
-// Use a clearly insecure default only for local development when no env is set
-const DEFAULT_DEV_PASSWORD = 'dev-only-change-in-production';
+// Password for accessing the app, provided via environment configuration.
+// Generate a strong value with:
+// node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+const SHARED_PASSWORD = String(process.env.AUTH_PASSWORD || '').trim();
 const TOKEN_VALIDITY_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 const CORS_HEADERS_BASE = {
@@ -207,9 +194,17 @@ exports.handler = async (event) => {
             });
         }
 
+        if (!SHARED_PASSWORD) {
+            console.error('[Auth] ERROR: AUTH_PASSWORD environment variable is not set!');
+            return jsonResponse({
+                statusCode: 500,
+                corsHeaders,
+                body: { error: 'Authentication is not configured on this deployment' }
+            });
+        }
+
         // Validate password
-        const effectivePassword = SHARED_PASSWORD || DEFAULT_DEV_PASSWORD;
-        if (password !== effectivePassword) {
+        if (password !== SHARED_PASSWORD) {
             // Add a small delay to prevent brute force
             await new Promise(resolve => setTimeout(resolve, 1000));
             return jsonResponse({
@@ -217,11 +212,6 @@ exports.handler = async (event) => {
                 corsHeaders,
                 body: { error: 'Invalid password' }
             });
-        }
-        
-        // Log warning if using default development password in production
-        if (!SHARED_PASSWORD) {
-            console.warn('[Auth] WARNING: Using default development password. Set AUTH_PASSWORD environment variable!');
         }
 
         // Generate token

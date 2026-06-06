@@ -6,6 +6,7 @@ import { getStream, getVideoTrack } from './camera.js';
 import { getToken } from './auth.js';
 import { isAndroid, OCR, sleep, clamp } from './utils.js';
 import { runLocalOCR, isLocalOCRReady, LOCAL_OCR_MODEL_LABEL } from './local-ocr.js';
+import { chooseOcrConsensusPartNumber, isMoSiblingAmbiguous } from './ocr-selection.js';
 
 // Image preprocessing constants
 const PREPROCESS_TARGET_WIDTH = 1100; // Optimal width for OCR (768–1280px recommended floor)
@@ -862,17 +863,21 @@ export async function scanPartNumber() {
             return;
         }
 
-        console.log('[OCR] Sending up to', validAttempts.length, 'attempts sequentially (early-exit on success)');
+        console.log('[OCR] Sending up to', validAttempts.length, 'attempts sequentially (early-exit on unambiguous success)');
 
         let partNumber = '';
         let ocrRaw = '';
         let ocrSuccess = false;
         const ocrResults = [];
+        const acceptedPartNumbers = [];
+        let firstAcceptedRaw = '';
         const topAttempts = validAttempts; // alias kept for debug summary below
 
-        // Step 3: Fire attempts one at a time. Stop as soon as one returns a valid part number.
-        // This avoids paying for a second API call when the first already succeeded.
-        for (const attemptData of validAttempts) {
+        // Step 3: Fire attempts one at a time. Stop as soon as one returns an
+        // unambiguous part number. EM/EO sibling pairs stay open for more votes
+        // because VLM OCR can confidently choose a valid-but-wrong sibling.
+        for (let attemptLoopIndex = 0; attemptLoopIndex < validAttempts.length; attemptLoopIndex++) {
+            const attemptData = validAttempts[attemptLoopIndex];
             if (scanToken !== activeScanToken) return;
 
             const ocrStartTime = perfNow();
@@ -904,18 +909,30 @@ export async function scanPartNumber() {
                 (isLikelyPartNumber(normalized) ? normalized : null);
 
             if (finalPartNumber && isLikelyPartNumber(finalPartNumber)) {
-                partNumber = finalPartNumber;
-                ocrRaw = rawPartNumber || '';
+                acceptedPartNumbers.push(finalPartNumber);
+                if (!firstAcceptedRaw) firstAcceptedRaw = rawPartNumber || '';
                 ocrSuccess = true;
                 if (result.ocrResponse.providerUsed) lastOcrProviderUsed = result.ocrResponse.providerUsed;
                 if (result.ocrResponse.modelUsed) lastOcrModelUsed = result.ocrResponse.modelUsed;
                 lastOcrProviderFallbackUsed = !!result.ocrResponse.providerFallbackUsed;
                 lastOcrModelFallbackUsed = !!result.ocrResponse.fallbackUsed;
-                console.log(`  ✓ Attempt ${result.index} (${result.attemptMode}): ${partNumber} (raw: ${ocrRaw})`);
-                break;
+                const ambiguousMoSibling = isMoSiblingAmbiguous(finalPartNumber, lookupLocation);
+                const hasMoreAttempts = attemptLoopIndex < validAttempts.length - 1;
+                console.log(`  ✓ Attempt ${result.index} (${result.attemptMode}): ${finalPartNumber} (raw: ${rawPartNumber || ''})${ambiguousMoSibling && hasMoreAttempts ? ' — checking EM/EO sibling ambiguity' : ''}`);
+
+                if (!ambiguousMoSibling || !hasMoreAttempts) {
+                    partNumber = chooseOcrConsensusPartNumber(acceptedPartNumbers, lookupLocation) || finalPartNumber;
+                    ocrRaw = firstAcceptedRaw || rawPartNumber || '';
+                    break;
+                }
             } else {
                 console.log(`  ✗ Attempt ${result.index} (${result.attemptMode}): No valid part number (raw: ${rawPartNumber})`);
             }
+        }
+
+        if (ocrSuccess && !partNumber) {
+            partNumber = chooseOcrConsensusPartNumber(acceptedPartNumbers, lookupLocation) || acceptedPartNumbers[0] || '';
+            ocrRaw = firstAcceptedRaw;
         }
 
         // Aggregate metrics
