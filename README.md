@@ -1,12 +1,10 @@
 # Instrument Scanner PWA
 
-A mobile-optimized Progressive Web App (PWA) for scanning instrument part numbers and looking up their storage locations in a CSSD (Central Sterile Supply Department).
+Instrument Scanner PWA is a mobile-first app for sterile services teams that turns instrument part numbers into storage locations in seconds.
 
-Built to replace a manual lookup workflow in a sterile services department. Staff previously had to look up instrument storage locations on a PC and write them on post-its — for every single instrument. This app lets you point your phone camera at a part number and get the answer immediately.
+Use your phone camera, voice, or manual entry to find the right location quickly. The app is designed for CSSD workflows where staff need a fast, reliable lookup tool on the floor instead of a PC-only process.
 
-It uses the camera, voice input, and manual entry to find part numbers quickly, with secure server-side OCR via Netlify Functions.
-
-> **Source-only:** This repo ships without private keys, production deployment settings, or hosted infrastructure. Connect it to your own Netlify account for a live deployment.
+> **Source-only:** This repository includes the full codebase, but not private keys, production deployment settings, or hosted infrastructure. Connect it to your own Netlify account to run it live.
 
 ## Screenshots
 
@@ -14,27 +12,27 @@ It uses the camera, voice input, and manual entry to find part numbers quickly, 
 
 ## Features
 
-- 📷 **Camera OCR** — scan part numbers with your phone camera using Gemini 2.5 Flash Lite (OpenRouter) with optional Hyperbolic fallback
-- 🎤 **Voice Input** — Danish speech recognition with fuzzy DB matching for low-confidence reads
-- ⌨️ **Manual Entry** — type part numbers directly with auto-suggest
-- 🔍 **Fuzzy Matching** — suggests similar part numbers with character-swap correction (O↔0, I↔1, S↔5, B↔8, Z↔2, M↔O)
-- 🧠 **Local OCR** — optional browser-side OCR via Florence-2 (Tesseract disabled; accuracy on label images was insufficient)
-- 📜 **History** — quick access to recent lookups, sortable by latest, location, or alphabetically
-- 📱 **PWA** — install on your home screen for native-like experience
-- 🔒 **Secure** — API keys stay server-side via Netlify Functions
-- 🌐 **Offline Support** — service worker caching for offline use
+- 📷 **Camera OCR** — scan part numbers with your phone camera using Gemini 2.5 Flash Lite through OpenRouter, with optional Hyperbolic fallback
+- 🎤 **Voice input** — Danish speech recognition with fuzzy matching for low-confidence reads
+- ⌨️ **Manual entry** — type part numbers directly with auto-suggest
+- 🔍 **Fuzzy correction** — handles common character swaps like `O ↔ 0`, `I ↔ 1`, and `S ↔ 5`
+- 🧠 **Optional local OCR** — browser-side OCR via Florence-2 when you want an offline-capable fallback
+- 📜 **Lookup history** — revisit recent searches and sort them by latest, location, or alphabetically
+- 📱 **Installable PWA** — add it to a home screen for a native-like experience
+- 🔒 **Server-side secrets** — API keys stay in Netlify Functions instead of the client
+- 🌐 **Offline support** — service worker caching keeps the core app available offline
 - 🔑 **Authentication** — shared password protection with 30-day sessions and rate limiting
-- 📊 **Usage Stats** — optional monthly OCR usage tracking via Netlify Blobs
+- 📊 **Usage stats** — optional monthly OCR usage tracking via Netlify Blobs
 
-## What's New (v1.0)
+## What’s New
 
-- **M→O correction** — OCR often misreads O as M in EO-prefix part numbers; the scorer now tries the M→O variant and prefers the DB match without penalizing O as ambiguous
-- **Sharpness gating** — blurry images are rejected before any OCR call; very sharp images skip preprocessing to avoid artifacts
-- **Sequential OCR attempts** — attempts fire one at a time and stop at the first successful result, avoiding unnecessary API calls
-- **Per-attempt timeouts** — initial attempt gets 4.5s, retries get progressively shorter (3s → 2.2s)
-- **Improved voice recognition** — unified rule-based normalization, DSP audio stream activation, fuzzy DB matching for low-confidence transcripts, noise transcript rejection
-- **Auth hardening** — authentication is configured explicitly through `AUTH_PASSWORD`; no built-in default password is shipped
-- **Database growth** — hundreds of new part numbers and location entries
+- **M→O correction** — the scorer now tries the `M → O` variant for EO-prefix part numbers and prefers the database match when it is stronger
+- **Sharpness gating** — blurry images are rejected before any OCR call, while very sharp images skip extra preprocessing
+- **Sequential OCR attempts** — attempts run one at a time and stop as soon as a valid result is found
+- **Per-attempt timeouts** — the first attempt gets 4.5s, then retries shorten to 3s and 2.2s
+- **Improved voice recognition** — unified normalization, DSP audio stream activation, fuzzy matching for low-confidence transcripts, and noise rejection
+- **Auth hardening** — authentication is configured explicitly through `AUTH_PASSWORD`, with no built-in default password shipped
+- **Database growth** — hundreds of new part numbers and storage locations have been added
 
 ## Requirements
 
@@ -61,11 +59,14 @@ npm install
 cp .env.example .env
 ```
 
-Edit `.env` — at minimum set the OCR API key and a token secret:
+Edit `.env` — at minimum set the OCR API key, the shared password, and a token secret:
 
 ```bash
 # Primary OCR provider (Gemini 2.5 Flash Lite via OpenRouter)
 OPENROUTER_API_KEY=your_openrouter_api_key_here
+
+# Shared app password
+AUTH_PASSWORD=your_shared_password_here
 
 # Token secret for session signing
 # Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
@@ -103,6 +104,7 @@ Open http://localhost:8888 in your browser.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `OPENROUTER_API_KEY` | Yes | Primary OCR provider API key (Gemini 2.5 Flash Lite) |
+| `AUTH_PASSWORD` | Yes | Shared password used for app login |
 | `AUTH_TOKEN_SECRET` | Yes | Secret for signing session tokens |
 | `HYPERBOLIC_API_KEY` | No | Fallback OCR provider API key (Pixtral-12B) |
 | `OCR_PRIMARY_PROVIDER` | No | Provider to use first (`openrouter` or `hyperbolic`) |
@@ -230,7 +232,7 @@ The app tries attempts sequentially: raw image → preprocessed variants. On eac
 - OCR requests are rate-limited per session (50 req/min)
 - CORS origin checks prevent unauthorized API access
 - Service worker caches only static app assets, never sensitive data
-- `AUTH_TOKEN_SECRET` now has a safe default for local development (set a strong value in production!)
+- `AUTH_TOKEN_SECRET` falls back to a local-development default in code, so set a strong value in production
 
 ## Troubleshooting
 
