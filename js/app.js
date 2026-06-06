@@ -22,6 +22,8 @@ function mapModelLabel(modelUsed) {
     if (!modelUsed) return null;
     if (modelUsed === LOCAL_OCR_MODEL_LABEL) return LOCAL_OCR_MODEL_LABEL;
     if (modelUsed === 'mistralai/Pixtral-12B-2409') return 'Pixtral';
+    if (modelUsed === 'Qwen/Qwen2.5-VL-72B-Instruct') return 'Qwen2.5 VL 72B';
+    if (modelUsed === 'Qwen/Qwen2.5-VL-7B-Instruct') return 'Qwen2.5 VL 7B';
     if (modelUsed === 'nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16') return 'Nemotron';
     if (modelUsed === 'google/gemini-2.5-flash-lite') return 'Gemini 2.5 Flash Lite';
     return modelUsed;

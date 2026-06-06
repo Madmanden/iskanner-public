@@ -33,7 +33,8 @@ const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB max
 const DEFAULT_PRIMARY_PROVIDER = 'openrouter';
 const DEFAULT_FALLBACK_PROVIDER = '';
 const DEFAULT_HYPERBOLIC_OCR_MODELS = [
-    'mistralai/Pixtral-12B-2409'
+    'Qwen/Qwen2.5-VL-72B-Instruct',
+    'Qwen/Qwen2.5-VL-7B-Instruct'
 ];
 const DEFAULT_OPENROUTER_OCR_MODELS = [
     'google/gemini-2.5-flash-lite'

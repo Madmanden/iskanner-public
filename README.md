@@ -62,7 +62,7 @@ AUTH_PASSWORD=your_shared_password_here
 # Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 AUTH_TOKEN_SECRET=your_secret_token_here
 
-# Optional fallback OCR provider (Pixtral-12B via Hyperbolic)
+# Optional fallback OCR provider (Hyperbolic vision-language model)
 # HYPERBOLIC_API_KEY=your_hyperbolic_api_key_here
 
 # Optional CORS restrictions
@@ -96,7 +96,7 @@ Open http://localhost:8888 in your browser.
 | `OPENROUTER_API_KEY` | Yes | Primary OCR provider API key (Gemini 2.5 Flash Lite) |
 | `AUTH_PASSWORD` | Yes | Shared password used for app login |
 | `AUTH_TOKEN_SECRET` | Yes | Secret for signing session tokens |
-| `HYPERBOLIC_API_KEY` | No | Fallback OCR provider API key (Pixtral-12B) |
+| `HYPERBOLIC_API_KEY` | No | Fallback OCR provider API key |
 | `OCR_PRIMARY_PROVIDER` | No | Provider to use first (`openrouter` or `hyperbolic`) |
 | `OCR_FALLBACK_PROVIDER` | No | Fallback provider |
 | `OPENROUTER_OCR_MODELS` | No | Comma-separated model list for OpenRouter |
@@ -152,8 +152,10 @@ Control the provider chain with environment variables:
 OCR_PRIMARY_PROVIDER=openrouter       # or 'hyperbolic'
 OCR_FALLBACK_PROVIDER=hyperbolic      # or leave empty for no fallback
 OPENROUTER_OCR_MODELS=google/gemini-2.5-flash-lite
-HYPERBOLIC_OCR_MODELS=mistralai/Pixtral-12B-2409
+HYPERBOLIC_OCR_MODELS=Qwen/Qwen2.5-VL-72B-Instruct,Qwen/Qwen2.5-VL-7B-Instruct
 ```
+
+> **Note:** Hyperbolic has sunset older vision-language models such as Pixtral. If you enable Hyperbolic, set `HYPERBOLIC_OCR_MODELS` to models currently available in your Hyperbolic account.
 
 The app tries attempts sequentially: raw image → preprocessed variants. On each attempt it:
 1. Checks sharpness (rejects blurry images immediately)
