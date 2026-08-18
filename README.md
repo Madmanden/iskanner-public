@@ -1,12 +1,18 @@
-# Instrument Scanner PWA
+# Instrumentskanner
 
-Instrument Scanner is a mobile-first PWA for sterile services (CSSD) teams. It turns instrument part numbers into storage locations using camera OCR, Danish voice input, or manual search.
+Instrumentskanner (Instrument Scanner) is a mobile-first PWA for sterile services (CSSD) teams. It turns instrument part numbers into storage locations using camera OCR, Danish voice input, or manual search.
+
+**Case study:** [christianholmdev.dk/projects/instrumentskanner](https://christianholmdev.dk/projects/instrumentskanner/)
 
 > **Sanitized public showcase:** this repository is generated from the private production codebase. Production instrument/location data, private documentation, credentials, deployment state and internal operational details are deliberately excluded.
 
 <p align="center">
-  <img src="screenshots/instrumentskanner.jpg" alt="Instrument Scanner mobile interface" width="320">
+  <img src="screenshots/instrumentskanner.jpg" alt="Instrumentskanner mobile interface" width="320">
 </p>
+
+## Why it exists
+
+The app replaces a slower desktop workflow: boot a PC, sign in to T-DOC, search a part number, and note the storage location. Instrumentskanner gives staff the same lookup answer from a phone or iPad and is designed for repeated use on the floor, including by temporary staff who may not have a personal T-DOC login.
 
 ## What it does
 
