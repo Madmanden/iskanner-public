@@ -1,5 +1,7 @@
 // Authentication module for managing login sessions
 
+import { debugLog } from './utils.js';
+
 const AUTH_TOKEN_KEY = 'instrumentskanner_auth_token';
 const AUTH_EXPIRY_KEY = 'instrumentskanner_auth_expiry';
 
@@ -42,7 +44,7 @@ export function getToken() {
  */
 export async function login(password) {
     try {
-        console.log('[Auth] Attempting login...');
+        debugLog('[Auth] Attempting login...');
         const response = await fetch('/.netlify/functions/auth', {
             method: 'POST',
             headers: {
@@ -51,23 +53,22 @@ export async function login(password) {
             body: JSON.stringify({ password })
         });
 
-        console.log('[Auth] Response status:', response.status);
+        debugLog('[Auth] Response status:', response.status);
 
         const data = await response.json();
-        console.log('[Auth] Response data:', data);
 
         if (response.ok && data.token) {
             const expiryTime = Date.now() + data.expiresIn;
             localStorage.setItem(AUTH_TOKEN_KEY, data.token);
             localStorage.setItem(AUTH_EXPIRY_KEY, expiryTime.toString());
 
-            console.log('[Auth] Login successful, token saved');
+            debugLog('[Auth] Login successful, token saved');
             return {
                 success: true,
                 message: data.message || 'Login successful'
             };
         } else {
-            console.warn('[Auth] Login failed:', data.error || 'Unknown error');
+            debugLog('[Auth] Login failed:', data.error || 'Unknown error');
             return {
                 success: false,
                 message: data.error || 'Login mislykkedes'

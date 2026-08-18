@@ -1,6 +1,6 @@
 // Configuration constants
 export const API_URL = '/.netlify/functions/ocr';
-export const JPEG_QUALITY = 0.85;
+export const JPEG_QUALITY = 0.78;
 export const OVERLAY_FEEDBACK_MS = 1200;
 export const VOICE_RESULT_DISPLAY_MS = 3000;
 export const MAX_RECENT_LOOKUPS = 50;
@@ -9,16 +9,18 @@ export const VOICE_CONFIDENCE_THRESHOLD = 0.7;
 export const VOICE_TIMEOUT_MS = 10000;
 
 // OCR crop adjustment: negative values shift the crop upward relative to the overlay.
-export const OCR_CROP_Y_BIAS_RATIO = -0.04;
+// Keep at 0 so the OCR crop aligns with the visible aiming box.
+export const OCR_CROP_Y_BIAS_RATIO = 0;
 
-// OCR attempt profiles: tweak thresholding and vertical bias per attempt.
-// Keep order meaningful because scanning stops on the first successful attempt.
+// OCR attempt profiles. Order matters: raw → pre in priority order.
+// Later attempts fire only if the previous returned no valid part number.
+// Note: pre variants may also be skipped before any OCR call if sharpness
+// gating determines the raw frame is already sufficiently sharp.
 export const OCR_ATTEMPTS = [
-    // Raw frame first to avoid over-processing artifacts that can cause hallucinations.
+    // Raw — cleanest signal, lowest hallucination risk. Best for sharp photos.
     { preprocess: false, thresholded: false, biasOffset: 0 },
-    { preprocess: true, thresholded: false, biasOffset: 0 },
-    { preprocess: true, thresholded: true, biasOffset: 0 },
-    { preprocess: true, thresholded: false, biasOffset: -0.03 }
+    // Preprocessed — contrast/brightness/sharpen boost for faded or low-contrast labels.
+    { preprocess: true,  thresholded: false, biasOffset: 0 },
 ];
 
 // OCR preprocessing profiles. Switch the key to try different contrast/brightness tunings.

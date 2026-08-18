@@ -3,7 +3,7 @@ import { initCameraElements, initCamera, stopCamera, resetCameraInactivityTimer,
 import { initUIElements, updateStatus, showError, setOverlayFeedbackEnabled, setOverlayScanning, removeOverlayScanning, displayResult, displaySearchResults, setOverlaySuccess, setOverlayError, saveToHistory } from './ui.js';
 import { initVoiceElements, initSpeechRecognition, isVoiceListening, stopVoiceRecognition, startVoiceRecognition } from './voice.js';
 import { initOCRElements, scanPartNumber, getLastOcrTimings, getLastOcrModelInfo } from './ocr.js';
-import { setButtonContents, lookupLocation, smartSearch } from './utils.js';
+import { setButtonContents, smartSearch, hasPartsDatabase, loadPartsDatabaseJson, debugLog } from './utils.js';
 import { isAuthenticated, login, getDaysUntilExpiry } from './auth.js';
 
 // State
@@ -19,8 +19,11 @@ function mapProviderLabel(providerUsed) {
 function mapModelLabel(modelUsed) {
     if (!modelUsed) return null;
     if (modelUsed === 'mistralai/Pixtral-12B-2409') return 'Pixtral';
+    if (modelUsed === 'Qwen/Qwen2.5-VL-72B-Instruct') return 'Qwen2.5 VL 72B';
+    if (modelUsed === 'Qwen/Qwen2.5-VL-7B-Instruct') return 'Qwen2.5 VL 7B';
     if (modelUsed === 'nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16') return 'Nemotron';
     if (modelUsed === 'google/gemini-2.5-flash-lite') return 'Gemini 2.5 Flash Lite';
+    if (modelUsed === 'openai/gpt-5.6-luna') return 'GPT-5.6 Luna';
     return modelUsed;
 }
 
@@ -66,7 +69,7 @@ function init() {
             hideLoginModal();
             const daysLeft = getDaysUntilExpiry();
             if (daysLeft <= 3 && daysLeft > 0) {
-                console.log(`[Auth] Session expires in ${daysLeft} days`);
+                debugLog(`[Auth] Session expires in ${daysLeft} days`);
             }
         }
     }
@@ -107,14 +110,14 @@ function init() {
             // Attempt login
             const loginResult = await login(password);
 
-            console.log('[App] Login result:', loginResult);
+            debugLog('[App] Login result:', loginResult);
 
             if (loginResult.success) {
-                console.log('[App] Login successful, hiding modal');
+                debugLog('[App] Login successful, hiding modal');
                 hideLoginModal();
                 updateStatus('Login vellykket', 'ready');
             } else {
-                console.log('[App] Login failed:', loginResult.message);
+                debugLog('[App] Login failed:', loginResult.message);
                 if (loginError) {
                     loginError.textContent = loginResult.message;
                     loginError.classList.remove('hidden');
@@ -132,19 +135,23 @@ function init() {
     // Check authentication on startup
     checkAuth();
 
+    // Kick off the fresh JSON parts database load (no-store) so lookups
+    // prefer the newest data; the bundled .js import covers offline first paint.
+    void loadPartsDatabaseJson();
+
     // Initialize modules with DOM elements
     initCameraElements(video, zoomControls, zoomSlider);
     initUIElements(result, status, overlay, historyList, historyBtn);
     initVoiceElements(voiceBtn, overlay);
     initOCRElements(video, canvas, overlay);
-    
-    // Fallback database if external file doesn't load
-    if (typeof partsDatabase === 'undefined') {
-        window.partsDatabase = {
-            '12345': 'Skab 78, højre række 4',
-            '67890': 'Skab 45, venstre række 2',
-            '11111': 'Skab 23, midten række 1',
-        };
+
+    if (!hasPartsDatabase()) {
+        showError('Varenummer-databasen kunne ikke indlæses. Kontakt administrator.');
+        updateStatus('Databasen mangler', 'error');
+        if (scanBtn) scanBtn.disabled = true;
+        if (voiceBtn) voiceBtn.disabled = true;
+        if (manualSearchBtn) manualSearchBtn.disabled = true;
+        if (manualInput) manualInput.disabled = true;
     }
     
     // Scan button handler
@@ -317,14 +324,6 @@ if (document.readyState === 'loading') {
 
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-        const isStandalone =
-            (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
-            (typeof navigator !== 'undefined' && navigator.standalone === true);
-
-        if (!isStandalone) {
-            return;
-        }
-
         navigator.serviceWorker.register('/sw.js').catch(() => {
             // no-op
         });

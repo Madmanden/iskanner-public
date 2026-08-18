@@ -2,7 +2,7 @@
 <html lang="da">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
     <meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
     <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
     <meta name="bingbot" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
@@ -14,14 +14,14 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.svg">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <link rel="stylesheet" href="css/styles.css?v=1.0">
+    <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
     <div class="container">
         <header>
             <div class="title-row">
                 <h1>Instrument skanner</h1>
-                <span class="version">V1.0</span>
+                <span class="version">V1.4.2</span>
                 <span id="offlineBadge" class="offline-badge hidden">Offline</span>
             </div>
         </header>
@@ -85,7 +85,6 @@
         </div>
     </div>
 
-    <!-- Login Modal -->
     <div id="loginModal" class="login-modal hidden">
         <div class="login-overlay"></div>
         <div class="login-container">
@@ -115,13 +114,7 @@
         </div>
     </div>
 
-    <form
-        name="wrong-location-reports"
-        method="POST"
-        data-netlify="true"
-        netlify-honeypot="bot-field"
-        hidden
-    >
+    <form name="wrong-location-reports" method="POST" data-netlify="true" netlify-honeypot="bot-field" hidden>
         <input type="hidden" name="form-name" value="wrong-location-reports" />
         <input type="text" name="bot-field" />
         <input type="text" name="timestamp" />
@@ -131,29 +124,17 @@
         <input type="text" name="source" />
         <input type="text" name="userAgent" />
     </form>
-    
-    <script src="parts-database.js"></script>
-    <script>
-        (function () {
-            try {
-                if ('serviceWorker' in navigator && navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
-                    navigator.serviceWorker.getRegistrations().then(function (regs) {
-                        regs.forEach(function (reg) {
-                            try { reg.unregister(); } catch (e) {}
-                        });
-                    }).catch(function () {});
-                }
-            } catch (e) {}
 
-            try {
-                if ('caches' in window && window.caches && window.caches.keys) {
-                    window.caches.keys().then(function (keys) {
-                        return Promise.all(keys.map(function (k) { return window.caches.delete(k); }));
-                    }).catch(function () {});
-                }
-            } catch (e) {}
-        })();
-    </script>
-    <script type="module" src="js/app.js?v=1.0"></script>
+    <form name="order-list" method="POST" data-netlify="true" netlify-honeypot="bot-field" hidden>
+        <input type="hidden" name="form-name" value="order-list" />
+        <input type="text" name="bot-field" />
+        <input type="text" name="timestamp" />
+        <input type="text" name="itemCount" />
+        <textarea name="items"></textarea>
+        <input type="text" name="userAgent" />
+    </form>
+    
+    <script type="module" src="js/app.js"></script>
+    <script type="module" src="js/order-mode.js"></script>
 </body>
 </html>

@@ -1,17 +1,17 @@
 {
   "name": "instrumentskanner",
-  "version": "1.0",
+  "version": "1.4.2",
   "description": "Instrument part scanner PWA with OCR",
   "type": "module",
   "scripts": {
     "dev": "netlify dev",
-    "build": "echo 'No build step required'",
+    "build": "node scripts/sync-app-version.mjs && node scripts/build-parts-json.mjs && node scripts/bump-sw-version.mjs && echo 'No build step required'",
     "deploy": "netlify deploy --prod",
     "test": "bun test",
     "test:watch": "bun test --watch"
   },
   "dependencies": {
-    "@netlify/blobs": "^8.1.0"
+    "@netlify/blobs": "^10.7.9"
   },
   "devDependencies": {
     "netlify-cli": "^17.0.0"

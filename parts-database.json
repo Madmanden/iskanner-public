@@ -1,7 +1,4 @@
-// Fictional demo data for the public showcase.
-// Replace with your own part-number/location mapping before deployment.
-
-const partsDatabase = {
+{
   "DEMO001": "Cabinet A, Drawer 1",
   "DEMO002": "Cabinet A, Drawer 2",
   "DEMO003": "Cabinet B, Shelf 1",
@@ -14,7 +11,4 @@ const partsDatabase = {
   "EO-DEMO-01": "Cabinet E, Drawer 1",
   "ZX900": "Cabinet F, Shelf 2",
   "ZX901": "Cabinet F, Shelf 3"
-};
-
-export { partsDatabase };
-export default partsDatabase;
+}

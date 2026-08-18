@@ -3,7 +3,7 @@
   "short_name": "Skanner",
   "start_url": "/index.html",
   "scope": "/",
-  "display": "browser",
+  "display": "standalone",
   "background_color": "#F8FAFC",
   "theme_color": "#3B82F6",
   "description": "Instrument part number scanner",

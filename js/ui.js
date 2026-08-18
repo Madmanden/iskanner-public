@@ -1,8 +1,11 @@
 // UI and display functions
 import { OVERLAY_FEEDBACK_MS, MAX_RECENT_LOOKUPS } from './config.js';
 import { escapeHtml, findClosestPartNumber, lookupLocation } from './utils.js';
+import { getToken } from './auth.js';
 // State
 let overlayFeedbackTimeoutId = null;
+let lastReportTime = 0;
+const REPORT_COOLDOWN_MS = 30000;
 
 // DOM elements (set during init)
 let resultEl = null;
@@ -62,6 +65,10 @@ export function showError(message) {
 }
 
 async function submitWrongLocationReport(payload) {
+    const now = Date.now();
+    if (now - lastReportTime < REPORT_COOLDOWN_MS) return;
+    lastReportTime = now;
+
     const formData = new FormData();
     formData.append('form-name', 'wrong-location-reports');
 
@@ -72,8 +79,13 @@ async function submitWrongLocationReport(payload) {
     formData.append('source', payload.source || '');
     formData.append('userAgent', payload.userAgent || '');
 
+    const token = getToken();
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const res = await fetch('/', {
         method: 'POST',
+        headers,
         body: formData
     });
 
@@ -111,7 +123,7 @@ function wireWrongLocationReportButton(options) {
     };
 }
 
-export function displayResult(partNumber, location, ocrRaw = null) {
+export function displayResult(partNumber, location, ocrRaw = null, options = {}) {
     if (!resultEl) return;
 
     setSearchResultsLayout(false);
@@ -129,27 +141,43 @@ export function displayResult(partNumber, location, ocrRaw = null) {
     } else {
         const cleaned = (partNumber || '').trim().toUpperCase();
         const ocrRawCleaned = (ocrRaw || '').trim();
-        const suggestion = cleaned ? findClosestPartNumber(cleaned) : null;
+        const providedSuggestions = Array.isArray(options.suggestions)
+            ? options.suggestions.filter(candidate => candidate && candidate.partNumber && candidate.location)
+            : [];
+        const suggestion = providedSuggestions.length === 0 && cleaned ? findClosestPartNumber(cleaned) : null;
+        const candidateButtons = providedSuggestions.map(candidate => `
+            <button type="button" class="suggestion-btn ocr-suggestion-btn" data-suggest="${escapeHtml(candidate.partNumber)}">
+                Mente du: ${escapeHtml(candidate.partNumber)}?<br>
+                <span class="result-location">📍 ${escapeHtml(candidate.location)}</span>
+            </button>
+        `).join('');
         resultEl.innerHTML = `
             <div class="error">
                 Varenummer ikke fundet i databasen
             </div>
             ${ocrRawCleaned ? `<div class="result-text" style="margin-top: 8px;"><span style="color: #64748B; font-weight: 600;">OCR:</span> <span class="instrument-number">${escapeHtml(ocrRawCleaned)}</span></div>` : ''}
+            ${candidateButtons}
             ${suggestion ? `<button class="suggestion-btn" id="ocrSuggestionBtn" data-suggest="${escapeHtml(suggestion)}">Mente du: ${escapeHtml(suggestion)}?</button>` : ''}
         `;
 
+        const acceptSuggestion = (btn) => {
+            const suggested = btn.dataset.suggest;
+            if (!suggested) return;
+            const suggestedLocation = lookupLocation(suggested);
+            if (suggestedLocation) {
+                displayResult(suggested, suggestedLocation);
+                setOverlaySuccess();
+                saveToHistory(suggested, suggestedLocation);
+            }
+        };
+
+        resultEl.querySelectorAll('.ocr-suggestion-btn').forEach(btn => {
+            btn.onclick = () => acceptSuggestion(btn);
+        });
+
         const btn = document.getElementById('ocrSuggestionBtn');
         if (btn) {
-            btn.onclick = () => {
-                const suggested = btn.dataset.suggest;
-                if (!suggested) return;
-                const suggestedLocation = lookupLocation(suggested);
-                if (suggestedLocation) {
-                    displayResult(suggested, suggestedLocation);
-                    setOverlaySuccess();
-                    saveToHistory(suggested, suggestedLocation);
-                }
-            };
+            btn.onclick = () => acceptSuggestion(btn);
         }
     }
 }
@@ -280,11 +308,7 @@ export function setOverlaySuccess() {
 
     if (!overlayFeedbackEnabled) return;
 
-    try {
-        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-            navigator.vibrate(25);
-        }
-    } catch (e) {}
+    triggerSuccessHaptic();
 
     overlayEl.classList.remove('scanning');
     overlayEl.classList.remove('overlay-error');
@@ -293,6 +317,14 @@ export function setOverlaySuccess() {
     overlayFeedbackTimeoutId = setTimeout(() => {
         overlayEl.classList.remove('success');
     }, OVERLAY_FEEDBACK_MS);
+}
+
+function triggerSuccessHaptic() {
+    try {
+        if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
+        // Slightly more noticeable than a single short pulse.
+        navigator.vibrate([20, 30, 20]);
+    } catch (e) {}
 }
 
 export function setOverlayError() {
@@ -309,6 +341,10 @@ export function setOverlayError() {
 }
 
 export function clearOverlayFeedback() {
+    if (overlayFeedbackTimeoutId) {
+        clearTimeout(overlayFeedbackTimeoutId);
+        overlayFeedbackTimeoutId = null;
+    }
     if (overlayEl) {
         overlayEl.classList.remove('success');
         overlayEl.classList.remove('overlay-error');

@@ -1,193 +1,122 @@
 # Instrument Scanner PWA
 
-A mobile-optimized Progressive Web App (PWA) for scanning instrument part numbers and looking up their storage locations.
+Instrument Scanner is a mobile-first PWA for sterile services (CSSD) teams. It turns instrument part numbers into storage locations using camera OCR, Danish voice input, or manual search.
 
-It uses the camera, voice input, and manual entry to find part numbers quickly, with secure server-side OCR via Netlify Functions.
+> **Sanitized public showcase:** this repository is generated from the private production codebase. Production instrument/location data, private documentation, credentials, deployment state and internal operational details are deliberately excluded.
 
-This repository is **source-only**: it ships without private keys, production deployment settings, or hosted infrastructure. If you want a live deployment, follow the deployment section and connect it to your own Netlify account.
+<p align="center">
+  <img src="screenshots/instrumentskanner.jpg" alt="Instrument Scanner mobile interface" width="320">
+</p>
 
-## Screenshots
+## What it does
 
-<img src="screenshots/screenshot.jpg" alt="Instrument Scanner screenshot" width="400" />
+- **Camera OCR** with preprocessing, bounded retries and database-aware correction.
+- **Danish voice lookup** with live transcript feedback, conservative fuzzy resolution, explicit ambiguous candidates and local learning from repeated confirmed corrections.
+- **Manual lookup** with exact/fuzzy database matching.
+- **History** with sorting by recency, part number or location.
+- **Order mode** that collects successful lookups into a local order list and can submit it through Netlify Forms.
+- **Installable PWA** with offline static assets and cached database fallback.
+- **Fresh database delivery**: the JS database is the source of truth; build generates JSON and the app fetches it network-first/no-store when online.
+- **Server-side OCR secrets**, shared-password sessions, CORS checks and rate limiting through Netlify Functions.
+- **Optional usage statistics** through Netlify Blobs.
 
-## Features
+## Demo data
 
-- 📷 **Camera OCR** — scan part numbers with your phone camera
-- 🎤 **Voice Input** — say the part number aloud
-- ⌨️ **Manual Entry** — type part numbers directly
-- 📜 **History** — quick access to recent lookups, sortable by latest, location, or alphabetically
-- 🔍 **Fuzzy Matching** — suggests similar part numbers if there’s no exact match
-- 📱 **PWA** — install on your home screen
-- 🔒 **Secure** — API keys stay server-side via Netlify Functions
-- 🌐 **Offline Support** — service worker caching for offline use
-- 🔑 **Authentication** — password protection and rate limiting
+The included `parts-database.js` / `.json` contain only fictional example part numbers and locations. Replace them with your own data before deployment.
 
 ## Requirements
 
 - Node.js 18+
-- [Netlify CLI](https://docs.netlify.com/cli/get-started/) (`npm install -g netlify-cli`)
-- A Hyperbolic API key for OCR
-- Optional OpenRouter API key as fallback OCR provider
-- A Netlify account if you want to deploy
+- Bun (tests)
+- Netlify CLI
+- OpenRouter API key for the default OCR provider
+- Netlify account for deployment
 
-## Quick Start
-
-### 1. Clone and install
+## Quick start
 
 ```bash
-git clone <your-repo-url>
-cd iskanner-public
 npm install
-```
-
-### 2. Configure environment variables
-
-```bash
 cp .env.example .env
-```
-
-Edit `.env`:
-
-```bash
-HYPERBOLIC_API_KEY=your_hyperbolic_api_key_here
-AUTH_TOKEN_SECRET=your_secret_token_here
-AUTH_PASSWORD=change-me-in-production
-# Optional fallback OCR provider
-# OPENROUTER_API_KEY=your_openrouter_api_key_here
-# Optional CORS settings
-# ALLOWED_ORIGINS=https://yourdomain.com,https://www.yourdomain.com
-```
-
-### 3. Run locally
-
-```bash
 npm run dev
 ```
 
-Open http://localhost:8888 in your browser.
+Set at minimum:
 
-> **Note:** Authentication and OCR only work when running through Netlify Dev. Opening `index.html` directly will not work for login or OCR.
+```bash
+OPENROUTER_API_KEY=...
+AUTH_PASSWORD=...
+AUTH_TOKEN_SECRET=...
+```
+
+Open `http://localhost:8888`. Authentication and OCR require Netlify Dev/Functions and do not work by opening `index.html` directly.
+
+## Tests and build
+
+```bash
+bun test
+npm run build
+```
+
+The public repository contains a sanitized smoke suite rather than production test fixtures. The build:
+
+1. syncs the user-visible version from `package.json`;
+2. generates `parts-database.json` from `parts-database.js`;
+3. gives the service-worker cache a unique build version.
 
 ## Deployment
 
-If you want a live deployment, Netlify can deploy this repo from GitHub commits. If you do nothing else, this repo stays source-only and unhosted.
+Connect the repository to Netlify. `netlify.toml` runs `npm run build` and publishes the repository root with `netlify/functions` as the Functions directory.
 
-### Netlify setup
+Required environment variables:
 
-1. Push this repo to GitHub
-2. Connect the repo to Netlify
-3. Add the environment variables in Netlify:
-   - `HYPERBOLIC_API_KEY`
-   - `AUTH_TOKEN_SECRET`
-   - `AUTH_PASSWORD`
-   - `OPENROUTER_API_KEY` if you want fallback OCR
-   - `ALLOWED_ORIGINS` if you want to restrict CORS
-   - `NETLIFY_SITE_ID` and `NETLIFY_BLOBS_TOKEN` if you want usage stats
-4. Deploy
+| Variable | Purpose |
+|---|---|
+| `OPENROUTER_API_KEY` | Default OCR provider |
+| `AUTH_PASSWORD` | Shared app password |
+| `AUTH_TOKEN_SECRET` | Session-token signing secret |
 
-### Automatic deploys
-
-Once connected, Netlify will deploy on every push to the configured branch.
-
-## Environment variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `HYPERBOLIC_API_KEY` | Yes | OCR provider API key |
-| `AUTH_PASSWORD` | Yes | Password for accessing the app |
-| `AUTH_TOKEN_SECRET` | Yes | Secret for signing auth tokens |
-| `OPENROUTER_API_KEY` | No | Fallback OCR provider |
-| `ALLOWED_ORIGINS` | No | Comma-separated list of allowed origins |
-| `NETLIFY_SITE_ID` | No | Enables usage stats with Netlify Blobs |
-| `NETLIFY_BLOBS_TOKEN` | No | Token for Netlify Blobs usage stats |
-
-## Customization
-
-### Parts database
-
-Edit `parts-database.js` to add your own part numbers and locations.
-
-### OCR settings
-
-Edit `js/config.js` to tune:
-
-- camera inactivity timeout
-- voice recognition timeout
-- recent lookup history size
-- JPEG quality
-- OCR preprocessing attempts
-
-### OCR providers
-
-By default the app uses Hyperbolic first, with OpenRouter as optional fallback.
-
-You can control the provider chain with environment variables:
-
-```bash
-OCR_PRIMARY_PROVIDER=hyperbolic
-OCR_FALLBACK_PROVIDER=openrouter
-HYPERBOLIC_OCR_MODELS=mistralai/Pixtral-12B-2409
-OPENROUTER_OCR_MODELS=google/gemini-2.5-flash-lite
-```
-
-## Usage
-
-1. Open the app on your phone
-2. Enter the password
-3. Tap **Scan** to open the camera
-4. Tap **Scan** again to capture
-5. Or tap **Tal** to use voice input
-6. Or type a part number manually
-7. Open **Historik** to sort recent lookups by latest, location, or alphabetically
+Optional variables include `HYPERBOLIC_API_KEY`, provider/model overrides, `ALLOWED_ORIGINS`, `NETLIFY_SITE_ID` and `NETLIFY_BLOBS_TOKEN`.
 
 ## Project structure
 
 ```text
 ├── index.html
-├── css/
-├── icons/
+├── css/styles.css
 ├── js/
 │   ├── app.js
 │   ├── auth.js
 │   ├── camera.js
 │   ├── config.js
 │   ├── ocr.js
+│   ├── ocr-selection.js
+│   ├── ocr-lookup.js
+│   ├── order-mode.js
+│   ├── search-v2.js
 │   ├── ui.js
 │   ├── utils.js
+│   ├── voice-lookup.js
 │   └── voice.js
-├── netlify/
-│   └── functions/
-│       ├── auth.js
-│       └── ocr.js
+├── netlify/functions/
+│   ├── lib/shared.js
+│   ├── auth.js
+│   ├── ocr.js
+│   └── ocr-usage.js
+├── scripts/
+├── tests/public-smoke.test.js
 ├── parts-database.js
-├── screenshots/
-│   └── screenshot.svg
+├── parts-database.json
 ├── manifest.json
 ├── sw.js
 └── netlify.toml
 ```
 
-## Security
+## Security notes
 
-- API keys stay server-side
-- Auth tokens are signed and expire after 30 days
-- OCR requests are rate limited
-- CORS origin checks are enabled
-- Service worker caches only the app assets
-
-## Troubleshooting
-
-**Buttons do nothing**
-- Make sure the app JavaScript loads without errors
-- Run through Netlify Dev locally
-- Clear cache / service worker if you previously loaded an older broken build
-
-**Login fails locally**
-- Use `npm run dev` instead of opening the HTML file directly
-
-**OCR doesn’t work**
-- Check that `HYPERBOLIC_API_KEY` is set
-- Add `OPENROUTER_API_KEY` if you want fallback OCR
+- API keys stay server-side in Netlify Functions.
+- Auth tokens are signed and time-limited.
+- OCR endpoints are authenticated and rate-limited.
+- CORS is restricted to configured/deployment origins.
+- The public repository intentionally contains no production inventory/location dataset.
 
 ## License
 

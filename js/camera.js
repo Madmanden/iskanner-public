@@ -85,41 +85,33 @@ async function applyAndroidCameraTuning(track) {
         caps = null;
     }
 
-    const supportsExposureComp = !!(caps && caps.exposureCompensation);
-    let exposureCompensation = null;
-    if (supportsExposureComp) {
-        const min = caps.exposureCompensation.min;
-        const max = caps.exposureCompensation.max;
-        const step = caps.exposureCompensation.step || 0.1;
-
-        const preferred = -0.5;
-        const clamped = Math.max(min, Math.min(max, preferred));
-        exposureCompensation = Math.round(clamped / step) * step;
-    }
-
-    const constraints = {
-        advanced: [
-            {
-                focusMode: 'continuous',
-                exposureMode: 'continuous',
-                whiteBalanceMode: 'continuous',
-                ...(exposureCompensation === null ? {} : { exposureCompensation })
-            }
-        ]
-    };
+    const constraints = buildAndroidCameraConstraints(caps);
+    if (!constraints) return;
 
     try {
         await track.applyConstraints(constraints);
     } catch (e) {
         try {
-            await track.applyConstraints({
-                focusMode: 'continuous',
-                exposureMode: 'continuous',
-                whiteBalanceMode: 'continuous'
-            });
+            await track.applyConstraints(constraints.advanced[0]);
         } catch (e2) {
         }
     }
+}
+
+export function buildAndroidCameraConstraints(caps) {
+    if (!caps || typeof caps !== 'object') return null;
+    const tuning = {};
+    for (const key of ['focusMode', 'exposureMode', 'whiteBalanceMode']) {
+        if (Array.isArray(caps[key]) && caps[key].includes('continuous')) tuning[key] = 'continuous';
+    }
+    if (caps.exposureCompensation && typeof caps.exposureCompensation === 'object') {
+        const { min, max, step = 0.1 } = caps.exposureCompensation;
+        if ([min, max].every(Number.isFinite) && Number.isFinite(step) && step > 0) {
+            const preferred = Math.max(min, Math.min(max, -0.5));
+            tuning.exposureCompensation = Math.round(preferred / step) * step;
+        }
+    }
+    return Object.keys(tuning).length ? { advanced: [tuning] } : null;
 }
 
 export function initCameraElements(videoEl, zoomControlsEl, zoomSliderEl) {
@@ -274,6 +266,12 @@ async function _initCameraInternal() {
                 return;
             } catch (error) {
                 lastError = error;
+                if (stream) {
+                    for (const track of stream.getTracks ? stream.getTracks() : []) track.stop();
+                    stream = null;
+                    videoTrack = null;
+                    if (video) video.srcObject = null;
+                }
             }
         }
         

@@ -1,14 +1,17 @@
 // Voice/Speech recognition module
 import { VOICE_CONFIDENCE_THRESHOLD, VOICE_TIMEOUT_MS, VOICE_RESULT_DISPLAY_MS } from './config.js';
 import { isLikelyPartNumberFormat, setButtonContents, lookupLocation } from './utils.js';
-import { 
-    updateStatus, 
-    displayVoiceLookup, 
-    showListeningFeedback, 
-    showInterimTranscript, 
+import { recordVoiceSelection, resolveVoicePartNumber } from './voice-lookup.js';
+import {
+    updateStatus,
+    displayResult,
+    displayVoiceLookup,
+    showListeningFeedback,
+    showInterimTranscript,
     showVoiceError,
     setOverlayScanning,
     removeOverlayScanning,
+    setOverlayError,
     clearOverlayFeedback
 } from './ui.js';
 
@@ -17,8 +20,10 @@ let recognition = null;
 let isListening = false;
 let lastHeardTranscript = '';
 let didProcessVoiceResult = false;
+let voiceErrorShown = false;
 let manualStopRequested = false;
 let shouldResetStatusOnEnd = false;
+let isStarting = false;
 let voiceTimeoutId = null;
 let overlayFeedbackTimeoutId = null;
 
@@ -33,6 +38,58 @@ export function initVoiceElements(voiceBtnEl, overlay) {
 
 export function isVoiceListening() {
     return isListening;
+}
+
+function scheduleOverlayCleanup() {
+    if (overlayFeedbackTimeoutId) clearTimeout(overlayFeedbackTimeoutId);
+    overlayFeedbackTimeoutId = setTimeout(() => {
+        clearOverlayFeedback();
+    }, VOICE_RESULT_DISPLAY_MS);
+}
+
+function wireVoiceCandidateButtons(sourcePartNumber, transcript) {
+    if (typeof document === 'undefined') return;
+
+    const wire = (btn) => {
+        if (!btn) return;
+        btn.onclick = () => {
+            const suggested = (btn.dataset.suggest || '').trim().toUpperCase();
+            if (!suggested) return;
+            const location = lookupLocation(suggested);
+            if (!location) return;
+
+            recordVoiceSelection(sourcePartNumber, suggested);
+            displayVoiceLookup(suggested, transcript);
+        };
+    };
+
+    document.querySelectorAll('.ocr-suggestion-btn').forEach(wire);
+    wire(document.getElementById('ocrSuggestionBtn'));
+}
+
+function presentVoiceResolution(resolution, transcript, sourcePartNumber) {
+    if (!resolution) {
+        displayVoiceLookup(null, null);
+        return false;
+    }
+
+    if (resolution.kind === 'exact' || resolution.kind === 'corrected') {
+        displayVoiceLookup(resolution.partNumber, transcript);
+        return true;
+    }
+
+    if (resolution.kind === 'suggestion') {
+        displayResult(resolution.partNumber, null, null, { suggestions: resolution.candidates });
+        wireVoiceCandidateButtons(sourcePartNumber, transcript);
+        setOverlayError();
+        updateStatus('Vælg det rigtige varenr.', 'ready');
+        return false;
+    }
+
+    displayResult(resolution.partNumber, null, null, { suggestions: [] });
+    setOverlayError();
+    updateStatus('Klar til scanning', 'ready');
+    return false;
 }
 
 export function stopVoiceRecognition() {
@@ -76,12 +133,13 @@ export function stopVoiceRecognition() {
 
     if (!recognition) return;
 
-    // Detach callbacks to prevent late events from updating UI after stop
+    // Detach callbacks to prevent late events from updating UI after stop / a completed final result.
+    // Keep onend attached so it can fire after abort()/stop() and clear
+    // the listening UI (spinner, result div).
     try {
         recognition.onresult = null;
         recognition.onerror = null;
         recognition.onstart = null;
-        recognition.onend = null;
     } catch (e) {
     }
 
@@ -102,8 +160,14 @@ export function stopVoiceRecognition() {
 }
 
 export function startVoiceRecognition() {
-    if (recognition) {
+    if (!recognition || isListening || isStarting) return;
+    manualStopRequested = false;
+    isStarting = true;
+    try {
         recognition.start();
+    } catch (e) {
+        isStarting = false;
+        showVoiceError('Talegenkendelse fejlede');
     }
 }
 
@@ -119,25 +183,31 @@ export function initSpeechRecognition() {
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognition = new SpeechRecognition();
-    
+
     recognition.lang = 'da-DK';
     recognition.continuous = false;
     recognition.interimResults = true;
-    recognition.maxAlternatives = 3;
-    
+    recognition.maxAlternatives = 5;
+
     recognition.onstart = () => {
+        isStarting = false;
         isListening = true;
         didProcessVoiceResult = false;
+        voiceErrorShown = false;
         manualStopRequested = false;
         shouldResetStatusOnEnd = true;
         lastHeardTranscript = '';
+        if (overlayFeedbackTimeoutId) {
+            clearTimeout(overlayFeedbackTimeoutId);
+            overlayFeedbackTimeoutId = null;
+        }
         if (voiceBtn) {
             voiceBtn.classList.add('active');
             setButtonContents(voiceBtn, '🛑', 'Stop');
         }
         updateStatus('Lytter efter varenr...', 'scanning');
         setOverlayScanning();
-        
+
         if (voiceTimeoutId) clearTimeout(voiceTimeoutId);
         voiceTimeoutId = setTimeout(() => {
             if (isListening) {
@@ -145,33 +215,41 @@ export function initSpeechRecognition() {
                 recognition.stop();
             }
         }, VOICE_TIMEOUT_MS);
-        
+
         showListeningFeedback();
     };
-    
+
     recognition.onresult = (event) => {
-        // Ignore any late results after the user pressed stop
-        if (!isListening || manualStopRequested) return;
+        // Ignore late or duplicate results after stop / a completed final result.
+        if (!isListening || manualStopRequested || didProcessVoiceResult) return;
 
         let interimTranscript = '';
         let finalTranscript = '';
-        
+
         for (let i = event.resultIndex; i < event.results.length; i++) {
             const result = event.results[i];
             const transcript = result[0].transcript;
-            
+
             if (result.isFinal) {
                 finalTranscript += transcript;
             } else {
                 interimTranscript += transcript;
             }
         }
-        
+
         if (interimTranscript) {
             lastHeardTranscript = interimTranscript;
             showInterimTranscript(interimTranscript);
+            // Reset the timeout — give the user a full silence window, not a hard cap.
+            if (voiceTimeoutId) clearTimeout(voiceTimeoutId);
+            voiceTimeoutId = setTimeout(() => {
+                if (isListening) {
+                    manualStopRequested = true;
+                    recognition.stop();
+                }
+            }, VOICE_TIMEOUT_MS);
         }
-        
+
         if (finalTranscript) {
             lastHeardTranscript = finalTranscript;
             processFinalResults(event);
@@ -183,7 +261,8 @@ export function initSpeechRecognition() {
         shouldResetStatusOnEnd = false;
         const results = event.results[event.results.length - 1];
         let bestTranscript = null;
-        let bestPartNumber = null;
+        let bestSourcePartNumber = null;
+        let bestResolution = null;
         let bestScore = -Infinity;
 
         for (let i = 0; i < results.length; i++) {
@@ -192,43 +271,72 @@ export function initSpeechRecognition() {
             if (!transcript) continue;
 
             const confidence = typeof r.confidence === 'number' ? r.confidence : 0;
+
+            // Reject noise-like transcripts before spending time on normalization.
+            if (transcript.length <= 1) continue;
+            if (transcript.length > 30) continue;
+            if (/(.)\1{4,}/.test(transcript)) continue;
+            if (transcript.split(/\s+/).filter(Boolean).length > 8) continue;
+
             const partNumber = normalizeVoicePartNumber(transcript);
             if (!partNumber) continue;
 
-            const dbHit = lookupLocation(partNumber) ? 1 : 0;
+            const resolution = resolveVoicePartNumber(partNumber, confidence);
             const patternHit = isLikelyPartNumberFormat(partNumber) ? 1 : 0;
             const sanitized = transcript.toUpperCase().replace(/[^A-Z0-9.\-]/g, '');
             const ratio = sanitized.length > 0 ? partNumber.length / sanitized.length : 1;
 
             let score = confidence;
-            if (confidence < VOICE_CONFIDENCE_THRESHOLD) score -= 0.25;
-            if (dbHit) score += 2.0;
+            if (resolution.kind === 'exact') score += 3.0;
+            if (resolution.kind === 'corrected') score += 2.5;
+            if (resolution.kind === 'suggestion') score += 2.0;
+            if (resolution.learned) score += 0.4;
             if (patternHit) score += 0.5;
             if (partNumber.length < 3) score -= 1.0;
             if (ratio < 0.6) score -= 0.25;
 
+            // Preserve the previous DB-backed confidence ranking: exact,
+            // corrected and ambiguous database candidates all count as DB evidence.
+            const hasDatabaseEvidence = resolution.kind === 'exact'
+                || resolution.kind === 'corrected'
+                || resolution.kind === 'suggestion';
+            if (hasDatabaseEvidence && confidence < 0.4) {
+                score -= 99;
+            } else if (hasDatabaseEvidence && confidence < VOICE_CONFIDENCE_THRESHOLD) {
+                score -= 0.15;
+            } else if (!hasDatabaseEvidence && confidence < VOICE_CONFIDENCE_THRESHOLD) {
+                score -= 0.5;
+            }
+
             if (score > bestScore) {
                 bestScore = score;
                 bestTranscript = transcript;
-                bestPartNumber = partNumber;
+                bestSourcePartNumber = partNumber;
+                bestResolution = resolution;
             }
         }
 
-        if (bestPartNumber) {
-            displayVoiceLookup(bestPartNumber, bestTranscript);
+        if (bestResolution) {
+            const resolvedSafely = presentVoiceResolution(bestResolution, bestTranscript, bestSourcePartNumber);
+            if (resolvedSafely && recognition && isListening) {
+                // We already have a trusted database result. End capture now rather
+                // than waiting for the browser's natural end/timeout.
+                try {
+                    recognition.stop();
+                } catch (e) {}
+            }
         } else {
             displayVoiceLookup(null, null);
         }
-        
-        if (overlayFeedbackTimeoutId) clearTimeout(overlayFeedbackTimeoutId);
-        overlayFeedbackTimeoutId = setTimeout(() => {
-            clearOverlayFeedback();
-        }, VOICE_RESULT_DISPLAY_MS);
+
+        scheduleOverlayCleanup();
     }
 
     recognition.onerror = (event) => {
+        isStarting = false;
+        voiceErrorShown = true;
         let errorMessage = 'Talegenkendelse fejlede';
-        
+
         switch (event.error) {
             case 'no-speech':
                 errorMessage = 'Ingen tale detekteret';
@@ -246,16 +354,18 @@ export function initSpeechRecognition() {
                 errorMessage = 'Talegenkendelse ikke tilladt';
                 break;
         }
-        
+
         showVoiceError(errorMessage);
-        
-        if (overlayFeedbackTimeoutId) clearTimeout(overlayFeedbackTimeoutId);
-        overlayFeedbackTimeoutId = setTimeout(() => {
-            clearOverlayFeedback();
-        }, VOICE_RESULT_DISPLAY_MS);
+        scheduleOverlayCleanup();
     };
-    
+
+    const boundRecognition = recognition;
     recognition.onend = () => {
+        // Ignore stale onend from a previous recognition instance,
+        // but allow it when recognition was cleared to null by stopVoiceRecognition.
+        if (recognition && boundRecognition !== recognition) return;
+
+        isStarting = false;
         isListening = false;
         if (voiceTimeoutId) {
             clearTimeout(voiceTimeoutId);
@@ -267,228 +377,130 @@ export function initSpeechRecognition() {
         }
         removeOverlayScanning();
 
-        if (manualStopRequested && !didProcessVoiceResult) {
-            shouldResetStatusOnEnd = false;
+        if (!didProcessVoiceResult && !voiceErrorShown) {
             const partNumber = normalizeVoicePartNumber(lastHeardTranscript);
-            displayVoiceLookup(partNumber);
+            if (partNumber) {
+                shouldResetStatusOnEnd = false;
+                // No reliable confidence exists for an interim/manual-stop fallback,
+                // so only exact hits can auto-resolve; corrections remain choices.
+                const resolution = resolveVoicePartNumber(partNumber, 0);
+                presentVoiceResolution(resolution, lastHeardTranscript, partNumber);
+                scheduleOverlayCleanup();
+            } else if (lastHeardTranscript) {
+                shouldResetStatusOnEnd = false;
+                displayVoiceLookup(null, null);
+            } else {
+                showVoiceError('Ingen tale detekteret');
+                scheduleOverlayCleanup();
+            }
         }
 
         if (shouldResetStatusOnEnd) {
             updateStatus('Klar til scanning', 'ready');
         }
     };
-    
+
     return true;
 }
 
-function normalizeVoicePartNumber(transcript) {
+export function normalizeVoicePartNumber(transcript) {
     const input = (transcript || '').trim().toUpperCase();
     if (!input) return null;
 
-    const tokenized = input.replace(/[^A-Z0-9.\-\s]/g, ' ').trim();
-    const tokens = tokenized ? tokenized.split(/\s+/).filter(Boolean) : [];
+    const raw = input.replace(/[^A-Z0-9.\-\s]/g, ' ').trim();
+    const tokens = raw.split(/\s+/).filter(Boolean);
 
-    const numberWords = {
-        'NUL': '0',
-        'NULL': '0',
-        'BUL': '0',
-        'BULL': '0',
-        'ET': '1',
-        'TO': '2',
-        'TRE': '3',
-        'FIRE': '4',
-        'FEM': '5',
-        'SEKS': '6',
-        'SYV': '7',
-        'OTTE': '8',
-        'NI': '9',
-        'ZERO': '0',
-        'ONE': '1',
-        'TWO': '2',
-        'THREE': '3',
-        'FOUR': '4',
-        'FIVE': '5',
-        'SIX': '6',
-        'SEVEN': '7',
-        'EIGHT': '8',
-        'NINE': '9'
-    };
+    // Unified recognition rules, ordered by priority (longest first)
+    // Format: [spoken, replacement]
+    const rules = [
+        // Danish multi-char sounds
+        ['DOBBELTVE', 'W'], ['DOBBELT', 'W'], ['BINDESTREG', '-'], ['BINDSTREG', '-'],
+        ['PUNKTUM', '.'], ['STREG', '-'],
+        // Danish letters
+        ['JOD', 'J'], ['ZET', 'Z'], ['SET', 'Z'], ['EKS', 'X'], ['HÅ', 'H'], ['KÅ', 'K'], ['ÆR', 'R'],
+        ['ARR', 'R'], ['AIR', 'R'], ['ASS', 'S'], ['ARS', 'S'],
+        // Double-letter forms (must come before single-letter to avoid partial match)
+        ['ENN', 'N'], ['EMM', 'M'], ['ELL', 'L'], ['EFF', 'F'],
+        ['BEE', 'B'], ['SEE', 'C'], ['DEE', 'D'], ['GEE', 'G'],
+        ['PEE', 'P'], ['TEE', 'T'], ['VEE', 'V'], ['ZEE', 'Z'],
+        // Danish letters
+        ['HO', 'H'], ['HA', 'H'],
+        ['KO', 'K'], ['KA', 'K'], ['KU', 'Q'],
+        ['HER', 'R'], ['ER', 'R'],
+        ['GE', 'G'],
+        ['EL', 'L'], ['EM', 'M'],
+        ['PE', 'P'], ['TE', 'T'], ['VE', 'V'], ['ES', 'S'],
+        ['Æ', 'Æ'], ['Ø', 'Ø'], ['Å', 'Å'],
+        // Punctuation
+        ['PRIK', '.'], ['PUNKT', '.'], ['DOT', '.'], ['MINUS', '-'], ['DASH', '-'],
+        // Danish numbers
+        ['NULL', '0'], ['NUL', '0'], ['BULL', '0'], ['BUL', '0'],
+        ['TRE', '3'], ['FIRE', '4'], ['FEM', '5'], ['SEKS', '6'],
+        ['SYV', '7'], ['OTTE', '8'], ['NI', '9'], ['TO', '2'], ['ET', '1'],
+        // English numbers
+        ['ZERO', '0'], ['ONE', '1'], ['TWO', '2'], ['THREE', '3'],
+        ['FOUR', '4'], ['FIVE', '5'], ['SIX', '6'],
+        ['SEVEN', '7'], ['EIGHT', '8'], ['NINE', '9'],
+        // Single-char letter forms (before general letter mappings)
+        ['A', 'A'], ['BE', 'B'], ['CE', 'C'], ['DE', 'D'],
+        ['E', 'E'], ['EF', 'F'], ['I', 'I'], ['J', 'J'],
+        ['L', 'L'], ['M', 'M'], ['N', 'N'], ['O', 'O'],
+        ['P', 'P'], ['R', 'R'], ['S', 'S'], ['T', 'T'],
+        ['U', 'U'], ['V', 'V'], ['X', 'X'], ['Y', 'Y'],
+        // Single-char number forms
+        ['0', '0'], ['1', '1'], ['2', '2'], ['3', '3'],
+        ['4', '4'], ['5', '5'], ['6', '6'],
+        ['7', '7'], ['8', '8'], ['9', '9'],
+    ];
 
-    const letterWords = {
-        'A': 'A',
-        'BE': 'B',
-        'CE': 'C',
-        'DE': 'D',
-        'E': 'E',
-        'EF': 'F',
-        'GE': 'G',
-        'HÅ': 'H',
-        'HA': 'H',
-        'HO': 'H',
-        'I': 'I',
-        'J': 'J',
-        'JOD': 'J',
-        'KÅ': 'K',
-        'KA': 'K',
-        'KO': 'K',
-        'EL': 'L',
-        'EM': 'M',
-        'EN': 'N',
-        'O': 'O',
-        'PE': 'P',
-        'KU': 'Q',
-        'ER': 'R',
-        'HER': 'R',
-        'ES': 'S',
-        'TE': 'T',
-        'U': 'U',
-        'VE': 'V',
-        'DOBBELT': 'W',
-        'DOBBELTVE': 'W',
-        'EKS': 'X',
-        'X': 'X',
-        'Y': 'Y',
-        'SET': 'Z',
-        'ZET': 'Z',
-        'Æ': 'Æ',
-        'Ø': 'Ø',
-        'Å': 'Å',
-        'ARR': 'R',
-        'AIR': 'R',
-        'ÆR': 'R',
-        'ASS': 'S',
-        'ARS': 'S',
-        'EFF': 'F',
-        'ELL': 'L',
-        'EMM': 'M',
-        'ENN': 'N',
-        'BEE': 'B',
-        'SEE': 'C',
-        'DEE': 'D',
-        'GEE': 'G',
-        'PEE': 'P',
-        'TEE': 'T',
-        'VEE': 'V',
-        'ZEE': 'Z'
-    };
-
-    const punctuationWords = {
-        'PUNKT': '.',
-        'PRIK': '.',
-        'PUNKTUM': '.',
-        'DOT': '.',
-        'STREG': '-',
-        'BINDESTREG': '-',
-        'BINDSTREG': '-',
-        'DASH': '-',
-        'MINUS': '-'
-    };
-
-    function mapToken(token, hasDigit) {
-        if (token === 'EN') return hasDigit ? 'N' : '1';
-        if (numberWords[token]) return numberWords[token];
-        if (letterWords[token]) return letterWords[token];
-        if (punctuationWords[token]) return punctuationWords[token];
-        if (/^[A-Z0-9.\-]+$/.test(token)) return token;
+    function findRule(token) {
+        for (const [from, to] of rules) {
+            if (token === from) return to;
+        }
         return null;
+    }
+
+    function applyRules(str) {
+        let result = str;
+        for (const [from, to] of rules) {
+            result = result.replace(new RegExp(from, 'g'), to);
+        }
+        return result;
     }
 
     if (tokens.length > 1) {
         let out = '';
         let hasDigit = false;
         for (const t of tokens) {
-            const mapped = mapToken(t, hasDigit);
-            if (!mapped) return null;
-            out += mapped;
-            if (/\d/.test(mapped)) hasDigit = true;
+            // Context-sensitive: 'EN' after a digit = 'N', otherwise = '1'
+            if (t === 'EN') {
+                out += hasDigit ? 'N' : '1';
+                hasDigit = true;
+                continue;
+            }
+            const mapped = findRule(t);
+            if (!mapped) {
+                // Allow raw alphanumeric tokens through
+                if (/^[A-Z0-9.\-]+$/.test(t)) {
+                    out += t;
+                    if (/\d/.test(t)) hasDigit = true;
+                } else {
+                    return null;
+                }
+            } else {
+                out += mapped;
+                if (/\d/.test(mapped)) hasDigit = true;
+            }
         }
         return out || null;
     }
 
-    let raw = input;
-    const embeddedRules = [
-        ['BINDESTREG', '-'],
-        ['BINDSTREG', '-'],
-        ['PUNKTUM', '.'],
-        ['PUNKT', '.'],
-        ['PRIK', '.'],
-        ['DOT', '.'],
-        ['MINUS', '-'],
-        ['DASH', '-'],
-        ['STREG', '-'],
-        ['NULL', '0'],
-        ['NUL', '0'],
-        ['BULL', '0'],
-        ['BUL', '0'],
-        ['ZERO', '0'],
-        ['ONE', '1'],
-        ['TWO', '2'],
-        ['THREE', '3'],
-        ['FOUR', '4'],
-        ['FIVE', '5'],
-        ['SIX', '6'],
-        ['SEVEN', '7'],
-        ['EIGHT', '8'],
-        ['NINE', '9'],
-        ['FIRE', '4'],
-        ['FEM', '5'],
-        ['SEKS', '6'],
-        ['SYV', '7'],
-        ['OTTE', '8'],
-        ['NI', '9'],
-        ['TRE', '3'],
-        ['TO', '2'],
-        ['ET', '1'],
-        ['DOBBELTVE', 'W'],
-        ['DOBBELT', 'W'],
-        ['HER', 'R'],
-        ['JOD', 'J'],
-        ['SET', 'Z'],
-        ['ZET', 'Z'],
-        ['EKS', 'X'],
-        ['HÅ', 'H'],
-        ['HA', 'H'],
-        ['HO', 'H'],
-        ['KÅ', 'K'],
-        ['KA', 'K'],
-        ['KO', 'K'],
-        ['KU', 'Q'],
-        ['BE', 'B'],
-        ['CE', 'C'],
-        ['DE', 'D'],
-        ['GE', 'G'],
-        ['PE', 'P'],
-        ['TE', 'T'],
-        ['VE', 'V'],
-        ['ER', 'R'],
-        ['ES', 'S'],
-        ['EF', 'F'],
-        ['EL', 'L'],
-        ['EM', 'M'],
-        ['EN', '1'],
-        ['ARR', 'R'],
-        ['AIR', 'R'],
-        ['ÆR', 'R'],
-        ['ASS', 'S'],
-        ['ARS', 'S'],
-        ['EFF', 'F'],
-        ['ELL', 'L'],
-        ['EMM', 'M'],
-        ['ENN', 'N'],
-        ['BEE', 'B'],
-        ['SEE', 'C'],
-        ['DEE', 'D'],
-        ['GEE', 'G'],
-        ['PEE', 'P'],
-        ['TEE', 'T'],
-        ['VEE', 'V'],
-        ['ZEE', 'Z']
-    ];
-
-    for (const [from, to] of embeddedRules) {
-        raw = raw.replace(new RegExp(from, 'g'), to);
+    // Single token: apply rules then extract valid chars
+    let result = applyRules(raw);
+    // Context-sensitive EN handling (EN can appear mid-token as 'N')
+    if (result.includes('EN')) {
+        result = result.replace(/EN/g, 'N');
     }
-
-    const result = raw.replace(/[^A-Z0-9.\-]/g, '');
+    result = result.replace(/[^A-Z0-9.\-]/g, '');
     return result || null;
 }
