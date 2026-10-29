@@ -1,14 +1,14 @@
 {
-  "DEMO001": "Cabinet A, Drawer 1",
-  "DEMO002": "Cabinet A, Drawer 2",
-  "DEMO003": "Cabinet B, Shelf 1",
-  "DEMO004": "Cabinet B, Shelf 2",
-  "ABC-100": "Cabinet C, Bin 4",
-  "ABC-101": "Cabinet C, Bin 5",
-  "100.200": "Cabinet D, Drawer 3",
-  "100.201": "Cabinet D, Drawer 4",
-  "EM-DEMO-01": "Demo order via supplier",
-  "EO-DEMO-01": "Cabinet E, Drawer 1",
-  "ZX900": "Cabinet F, Shelf 2",
-  "ZX901": "Cabinet F, Shelf 3"
+ "DEMO001": "Cabinet A, Drawer 1",
+ "DEMO002": "Cabinet A, Drawer 2",
+ "DEMO003": "Cabinet B, Shelf 1",
+ "DEMO004": "Cabinet B, Shelf 2",
+ "ABC-100": "Cabinet C, Bin 4",
+ "ABC-101": "Cabinet C, Bin 5",
+ "100.200": "Cabinet D, Drawer 3",
+ "100.201": "Cabinet D, Drawer 4",
+ "EM-DEMO-01": "Demo order via supplier",
+ "EO-DEMO-01": "Cabinet E, Drawer 1",
+ "ZX900": "Cabinet F, Shelf 2",
+ "ZX901": "Cabinet F, Shelf 3"
 }

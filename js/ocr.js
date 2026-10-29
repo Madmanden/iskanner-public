@@ -5,10 +5,14 @@ import { findClosestPartNumber, lookupLocation, debugLog, isAndroid, OCR, sleep,
 import { getStream, getVideoTrack } from './camera.js';
 import { getToken } from './auth.js';
 import { chooseOcrConsensusPartNumber, isMoSiblingAmbiguous } from './ocr-selection.js';
-import { lookupOcrPartNumber } from './ocr-lookup.js';
+import { findOcrCorrectionHits, lookupOcrPartNumber } from './ocr-lookup.js';
+import { clearPendingOcrFeedback, setPendingOcrFeedback } from './ocr-feedback.js';
 
 // Image preprocessing constants
-const PREPROCESS_TARGET_WIDTH = 1100; // Optimal width for OCR (768–1280px recommended floor)
+// Crops are usually only a few hundred source pixels wide, so upscaling further
+// adds no detail. Above 768 px Gemini splits the image into several 768×768
+// tiles, which costs more image tokens, payload and latency.
+const PREPROCESS_TARGET_WIDTH = 768;
 
 // Safe performance.now() wrapper — falls back to Date.now() in contexts where
 // the Performance API is unavailable (older browsers, non-window environments).
@@ -96,6 +100,9 @@ function getPreprocessingSettings() {
 
 let activeOcrController = null;
 let activeScanToken = 0;
+// Continuous focus/exposure is applied once per camera track; re-applying it on
+// every scan costs time and can trigger a refocus right before capture.
+const continuousModeTracks = new WeakSet();
 
 let lastOcrNetworkMs = 0;
 let lastOcrNetworkCalls = 0;
@@ -104,6 +111,7 @@ let lastOcrModelUsed = null;
 let lastOcrModelFallbackUsed = false;
 let lastOcrProviderUsed = null;
 let lastOcrProviderFallbackUsed = false;
+let lastOcrServerTimings = [];
 
 export function countOcrNetworkCalls(ocrResults) {
     if (!Array.isArray(ocrResults)) return 0;
@@ -132,7 +140,8 @@ export function ocrErrorMessage(errorType) {
         timeout: 'OCR tog for lang tid. Prøv igen med et skarpere billede.',
         network: 'Netværksfejl. Kontrollér forbindelsen og prøv igen.',
         server: 'OCR-serveren kunne ikke behandle billedet. Prøv igen.',
-        no_result: 'OCR fandt ikke et varenummer. Hold kameraet stabilt og fyld rammen med etiketten.'
+        no_result: 'OCR fandt ikke et varenummer. Hold kameraet stabilt og fyld rammen med etiketten.',
+        glare: 'Refleks i billedet. Vip instrumentet eller etiketten lidt, så lyset ikke spejler, og prøv igen.'
     }[errorType] || 'Scanning mislykkedes. Prøv igen.';
 }
 
@@ -297,11 +306,29 @@ function varianceOfLaplacianFromImageData(imageData, width, height) {
     return (sumSq / n) - mean * mean;
 }
 
-function computeSharpnessScore(canvas) {
-    if (!canvas) return 0;
+/**
+ * Share of pixels clipped to white in all three channels. Specular glare on
+ * steel or foil clips like this; it is only used as a hint when a scan fails,
+ * because a brightly exposed white label can clip too.
+ */
+export function clippedPixelRatioFromImageData(imageData) {
+    const data = imageData && imageData.data;
+    if (!data || !data.length) return 0;
+    const level = OCR.GLARE_CLIPPED_LEVEL;
+    let clipped = 0;
+    for (let i = 0; i < data.length; i += 4) {
+        if (data[i] >= level && data[i + 1] >= level && data[i + 2] >= level) clipped++;
+    }
+    return clipped / (data.length / 4);
+}
+
+// Sharpness and glare of a frame, measured on one downscaled copy.
+function measureFrame(canvas) {
+    const empty = { sharpness: 0, clippedRatio: 0 };
+    if (!canvas) return empty;
     const srcW = canvas.width;
     const srcH = canvas.height;
-    if (!srcW || !srcH) return 0;
+    if (!srcW || !srcH) return empty;
 
     const maxDim = 320;
     const scale = Math.min(1, maxDim / Math.max(srcW, srcH));
@@ -313,11 +340,14 @@ function computeSharpnessScore(canvas) {
     tmp.width = w;
     tmp.height = h;
     const tctx = tmp.getContext('2d', { willReadFrequently: true });
-    if (!tctx) return 0;
+    if (!tctx) return empty;
     tctx.drawImage(canvas, 0, 0, w, h);
 
     const imageData = tctx.getImageData(0, 0, w, h);
-    return varianceOfLaplacianFromImageData(imageData, w, h);
+    return {
+        sharpness: varianceOfLaplacianFromImageData(imageData, w, h),
+        clippedRatio: clippedPixelRatioFromImageData(imageData)
+    };
 }
 
 function matchesPartNumberFormat(value) {
@@ -404,17 +434,32 @@ function normalizeAndCorrectOcrPartNumber(value) {
     return best;
 }
 
+// The model answers with one candidate per line. Each line counts as a whole
+// (spaces removed) and through its tokens, so "XA 901R" and "REF XA901R" both
+// yield XA901R.
 function extractPotentialPartNumbers(text) {
     const candidates = [];
-    const matches = String(text || '').match(/[A-Z0-9.\-]+/gi) || [];
-    for (const match of matches) {
-        const cleaned = match.replace(/[^A-Z0-9.\-]/g, '');
-        if (cleaned.length >= 2) candidates.push(cleaned);
+    const add = (value) => {
+        const cleaned = String(value || '').toUpperCase().replace(/[^A-Z0-9.\-]/g, '');
+        if (cleaned.length >= 2 && !candidates.includes(cleaned)) candidates.push(cleaned);
+    };
+    for (const line of String(text || '').split(/\r?\n/)) {
+        add(line.replace(/\s+/g, ''));
+        for (const match of line.match(/[A-Z0-9.\-]+/gi) || []) add(match);
     }
     return candidates;
 }
 
-function extractAndSelectBestPartNumber(rawOutput) {
+// First line of the model answer: its own most likely reading.
+function firstOcrReading(rawText) {
+    return String(rawText || '').split(/\r?\n/).map(line => line.trim()).find(Boolean) || '';
+}
+
+function formatOcrRawForDisplay(rawText) {
+    return String(rawText || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).join(' / ');
+}
+
+export function extractAndSelectBestPartNumber(rawOutput) {
     const candidates = extractPotentialPartNumbers(rawOutput);
     if (candidates.length === 0) return null;
 
@@ -424,17 +469,22 @@ function extractAndSelectBestPartNumber(rawOutput) {
         const corrected = normalizeAndCorrectOcrPartNumber(cand) || normalizeOcrPartNumber(cand) || '';
         if (!corrected) continue;
         let inDb = false;
+        let correctable = false;
         try {
             inDb = !!lookupLocation(corrected);
+            // Not a key itself, but a look-alike swap or two away from one;
+            // lookupOcrPartNumber() decides later whether to apply the swap.
+            correctable = !inDb && findOcrCorrectionHits(corrected).length > 0;
         } catch (e) {}
         const score = scorePartNumberCandidate(corrected);
-        ranked.push({ value: corrected, score, inDb });
+        ranked.push({ value: corrected, score, inDb, correctable });
     }
 
     if (!ranked.length) return null;
 
     const dbMatches = ranked.filter(r => r.inDb);
-    const pool = dbMatches.length ? dbMatches : ranked;
+    const correctable = ranked.filter(r => r.correctable);
+    const pool = dbMatches.length ? dbMatches : (correctable.length ? correctable : ranked);
 
     let best = null;
     let bestScore = -Infinity;
@@ -445,7 +495,7 @@ function extractAndSelectBestPartNumber(rawOutput) {
         }
     }
 
-    if (bestScore < OCR.MIN_DISPLAY_SCORE && dbMatches.length === 0) return null;
+    if (bestScore < OCR.MIN_DISPLAY_SCORE && dbMatches.length === 0 && correctable.length === 0) return null;
 
     return best;
 }
@@ -616,6 +666,39 @@ function applySharpening(canvas, ctx) {
     ctx.putImageData(imageData, 0, 0);
 }
 
+let burstCanvas = null;
+let burstCtx = null;
+
+/**
+ * Draw up to OCR.BURST_FRAMES video frames of the crop and keep the sharpest
+ * one in canvasEl. Stops early once a frame is sharp enough that preprocessing
+ * would be skipped anyway. Returns the sharpness and glare of the kept frame.
+ */
+async function captureSharpestFrame(sx, sy, sourceW, sourceH) {
+    if (!burstCanvas) {
+        burstCanvas = document.createElement('canvas');
+        burstCtx = burstCanvas.getContext('2d', { willReadFrequently: true });
+    }
+    burstCanvas.width = canvasEl.width;
+    burstCanvas.height = canvasEl.height;
+    burstCtx.imageSmoothingEnabled = true;
+    burstCtx.imageSmoothingQuality = 'high';
+
+    let best = { sharpness: -1, clippedRatio: 0 };
+    const frames = Math.max(1, OCR.BURST_FRAMES || 1);
+    for (let i = 0; i < frames; i++) {
+        if (i > 0) await sleep(OCR.BURST_INTERVAL_MS);
+        burstCtx.drawImage(videoEl, sx, sy, sourceW, sourceH, 0, 0, burstCanvas.width, burstCanvas.height);
+        const frame = measureFrame(burstCanvas);
+        if (frame.sharpness > best.sharpness) {
+            best = frame;
+            ctxEl.drawImage(burstCanvas, 0, 0);
+        }
+        if (best.sharpness > OCR.SHARPNESS_EARLY_EXIT) break;
+    }
+    return best;
+}
+
 /**
  * Capture and preprocess a single OCR attempt variant
  */
@@ -647,40 +730,28 @@ async function prepareOcrAttempt(attempt, params) {
     sw = clamp(sw, 1, srcW - sx);
     sh = clamp(sh, 1, srcH - sy);
 
-    const shouldUpscale = isAndroid();
-    const targetWidth = shouldUpscale ? 1200 : PREPROCESS_TARGET_WIDTH;
-
     const sourceW = Math.round(sw);
     const sourceH = Math.round(sh);
 
-    const scaleFactor = (targetWidth > 0 && sourceW > 0)
-        ? Math.max(1, targetWidth / sourceW)
+    const scaleFactor = (PREPROCESS_TARGET_WIDTH > 0 && sourceW > 0)
+        ? Math.max(1, PREPROCESS_TARGET_WIDTH / sourceW)
         : 1;
 
     canvasEl.width = Math.round(sourceW * scaleFactor);
     canvasEl.height = Math.round(sourceH * scaleFactor);
 
-    ctxEl.imageSmoothingEnabled = true;
-    ctxEl.imageSmoothingQuality = 'high';
-
-    ctxEl.drawImage(
-        videoEl,
-        Math.round(sx), Math.round(sy), sourceW, sourceH,
-        0, 0, canvasEl.width, canvasEl.height
-    );
-
-    // Compute sharpness on the raw frame before any preprocessing.
-    // This gates both the blurry-image rejection and the early-exit check below.
-    const sharpnessScore = computeSharpnessScore(canvasEl);
+    // Sharpness is measured on the raw frame before any preprocessing.
+    // It gates both the blurry-image rejection and the early-exit check below.
+    const { sharpness: sharpnessScore, clippedRatio } = await captureSharpestFrame(Math.round(sx), Math.round(sy), sourceW, sourceH);
     if (sharpnessScore < OCR.SHARPNESS_MIN_THRESHOLD) {
-        return { success: false, error: 'Too blurry', sharpness: sharpnessScore };
+        return { success: false, error: 'Too blurry', sharpness: sharpnessScore, clippedRatio };
     }
 
     // If the raw image is already very sharp, skip preprocessed variants entirely.
     // Applying contrast/sharpen to an already-sharp image adds artifacts that hurt
     // vision model accuracy; the raw attempt handles these cases better.
     if (preprocess !== false && sharpnessScore > OCR.SHARPNESS_EARLY_EXIT) {
-        return { success: false, error: 'Skipped: high sharpness, raw preferred', sharpness: sharpnessScore };
+        return { success: false, error: 'Skipped: high sharpness, raw preferred', sharpness: sharpnessScore, clippedRatio };
     }
 
     if (preprocess !== false) {
@@ -706,7 +777,8 @@ async function prepareOcrAttempt(attempt, params) {
         sourceH,
         targetW: canvasEl.width,
         targetH: canvasEl.height,
-        sharpness: Math.round(sharpnessScore)
+        sharpness: Math.round(sharpnessScore),
+        clippedRatio: Math.round(clippedRatio * 1000) / 1000
     });
 
     return {
@@ -718,6 +790,7 @@ async function prepareOcrAttempt(attempt, params) {
         targetW: canvasEl.width,
         targetH: canvasEl.height,
         sharpness: sharpnessScore,
+        clippedRatio,
         approxBytes: encoded.approxBytes
     };
 }
@@ -740,13 +813,15 @@ export async function scanPartNumber() {
     lastOcrProviderFallbackUsed = false;
     lastOcrModelUsed = null;
     lastOcrModelFallbackUsed = false;
-
-    await sleep(150);
-    if (scanToken !== activeScanToken) return;
-    if (isExpired(scanStartedAt, scanTimeoutMs)) throw new Error('Scan timeout');
+    lastOcrServerTimings = [];
+    // A new scan supersedes any earlier one still waiting for a confirmed answer.
+    clearPendingOcrFeedback();
 
     const track = getVideoTrack();
-    await ensureContinuousFocusExposure(track);
+    if (track && !continuousModeTracks.has(track)) {
+        continuousModeTracks.add(track);
+        await ensureContinuousFocusExposure(track);
+    }
     await waitForCameraSettingsToSettle(track, { maxWaitMs: 250, pollMs: 60, stableSamplesRequired: 1 });
     if (scanToken !== activeScanToken) return;
     if (isExpired(scanStartedAt, scanTimeoutMs)) throw new Error('Scan timeout');
@@ -780,37 +855,13 @@ export async function scanPartNumber() {
 
         const attempts = OCR_ATTEMPTS || [];
 
-        debugLog('[OCR] Preparing', attempts.length, 'attempt variants from frame');
+        const cropParams = {
+            left, top, width, height,
+            srcW, srcH, displayW, displayH,
+            scale, offsetX, offsetY
+        };
 
-        // Step 1: Prepare all attempts in parallel (preprocessing is CPU-bound)
-        const preparedAttempts = await Promise.all(
-            attempts.map(attempt => prepareOcrAttempt(attempt, {
-                left, top, width, height,
-                srcW, srcH, displayW, displayH,
-                scale, offsetX, offsetY
-            }))
-        );
-
-        // Step 2: Filter to successfully prepared attempts, preserving config order.
-        // Intentional order: raw → pre (least to most aggressive processing).
-        // Do NOT sort by sharpness — that always promotes the preprocessed image
-        // to the front, ahead of the raw image.
-        const validAttempts = preparedAttempts
-            .map((result, index) => ({ ...result, index }))
-            .filter(r => r.success);
-
-        if (validAttempts.length === 0) {
-            const failedAttempts = preparedAttempts.filter(r => !r.success);
-            debugLog('[OCR] All attempts failed:', failedAttempts.map(e => e.error));
-            const allBlurry = failedAttempts.every(r => r.error === 'Too blurry');
-            showError(allBlurry
-                ? 'Billedet er for uskarpt. Hold kameraet stabilt og fyld rammen med etiketten.'
-                : 'Scanning fejlede. Prøv igen.');
-            setOverlayError();
-            return;
-        }
-
-        debugLog('[OCR] Sending up to', validAttempts.length, 'attempts sequentially (early-exit on unambiguous success)');
+        debugLog('[OCR] Up to', attempts.length, 'attempts, prepared lazily (early-exit on unambiguous success)');
 
         let partNumber = '';
         let ocrRaw = '';
@@ -820,14 +871,26 @@ export async function scanPartNumber() {
         const acceptedPartNumbers = [];
         let firstAcceptedRaw = '';
         let lastOcrError = null;
-        const topAttempts = validAttempts; // alias kept for debug summary below
+        const topAttempts = []; // successfully prepared attempts, for the debug summary below
+        const failedPreparations = [];
 
-        // Step 3: Fire attempts one at a time. Stop as soon as one returns an
-        // unambiguous part number. EM/EO sibling pairs stay open for more votes
-        // because VLM OCR can confidently choose a valid-but-wrong sibling.
-        for (let attemptLoopIndex = 0; attemptLoopIndex < validAttempts.length; attemptLoopIndex++) {
-            const attemptData = validAttempts[attemptLoopIndex];
+        // Prepare and fire attempts one at a time, in config order (raw → pre).
+        // A later variant is only captured and preprocessed if the earlier ones
+        // did not settle the result, so a successful raw read skips that work.
+        // Stop as soon as one returns an unambiguous part number. EM/EO sibling
+        // pairs stay open for more votes because VLM OCR can confidently choose
+        // a valid-but-wrong sibling.
+        for (let attemptLoopIndex = 0; attemptLoopIndex < attempts.length; attemptLoopIndex++) {
             if (scanToken !== activeScanToken) return;
+            const prepared = await prepareOcrAttempt(attempts[attemptLoopIndex], cropParams);
+            if (scanToken !== activeScanToken) return;
+            if (!prepared.success) {
+                failedPreparations.push(prepared);
+                debugLog(`  - Attempt ${attemptLoopIndex}: ${prepared.error}`);
+                continue;
+            }
+            const attemptData = { ...prepared, index: attemptLoopIndex };
+            topAttempts.push(attemptData);
 
             const ocrStartTime = perfNow();
             let result;
@@ -856,7 +919,7 @@ export async function scanPartNumber() {
             }
 
             const rawPartNumber = result.ocrResponse.partNumber;
-            const normalized = normalizeOcrPartNumber(rawPartNumber);
+            const normalized = normalizeOcrPartNumber(firstOcrReading(rawPartNumber));
             const corrected = normalizeAndCorrectOcrPartNumber(normalized);
             const extracted = extractAndSelectBestPartNumber(rawPartNumber);
 
@@ -873,7 +936,7 @@ export async function scanPartNumber() {
                 lastOcrModelFallbackUsed = !!result.ocrResponse.fallbackUsed;
 
                 const ambiguousMoSibling = isMoSiblingAmbiguous(finalPartNumber, lookupLocation);
-                const hasMoreAttempts = attemptLoopIndex < validAttempts.length - 1;
+                const hasMoreAttempts = attemptLoopIndex < attempts.length - 1;
                 debugLog(`  ✓ Attempt ${result.index} (${result.attemptMode}): ${finalPartNumber} (raw: ${rawPartNumber || ''})${ambiguousMoSibling && hasMoreAttempts ? ' — checking EM/EO sibling ambiguity' : ''}`);
 
                 if (!ambiguousMoSibling || !hasMoreAttempts) {
@@ -884,6 +947,16 @@ export async function scanPartNumber() {
             } else {
                 debugLog(`  ✗ Attempt ${result.index} (${result.attemptMode}): No valid part number (raw: ${rawPartNumber})`);
             }
+        }
+
+        if (topAttempts.length === 0) {
+            debugLog('[OCR] All attempts failed:', failedPreparations.map(e => e.error));
+            const allBlurry = failedPreparations.length > 0 && failedPreparations.every(r => r.error === 'Too blurry');
+            showError(allBlurry
+                ? 'Billedet er for uskarpt. Hold kameraet stabilt og fyld rammen med etiketten.'
+                : 'Scanning fejlede. Prøv igen.');
+            setOverlayError();
+            return;
         }
 
         if (ocrSuccess && !partNumber) {
@@ -899,6 +972,9 @@ export async function scanPartNumber() {
         lastOcrNetworkMs = ocrResults.reduce((sum, r) => sum + (r.ocrNetworkMs || 0), 0);
         lastOcrPayloadBytes = ocrResults.reduce((sum, r) => sum + (r.approxBytes || 0), 0);
         lastOcrNetworkCalls = countOcrNetworkCalls(ocrResults);
+        lastOcrServerTimings = ocrResults
+            .map(r => r && r.ocrResponse && r.ocrResponse.serverTiming)
+            .filter(Boolean);
 
         debugLog('[OCR] Scan complete | attempts fired:', ocrResults.length, '| success:', ocrSuccess);
 
@@ -913,7 +989,9 @@ export async function scanPartNumber() {
                 model: lastOcrModelUsed || '(pending)',
                 result: ocrSuccess ? partNumber : '(none)',
                 apiCalls: lastOcrNetworkCalls,
-                networkMs: lastOcrNetworkMs
+                networkMs: lastOcrNetworkMs,
+                clippedRatio: best.clippedRatio,
+                serverTimings: lastOcrServerTimings
             });
         }
 
@@ -931,7 +1009,7 @@ export async function scanPartNumber() {
             let resolvedPartNumber = normalized;
             const lookup = lookupOcrPartNumber(resolvedPartNumber);
             debugLog('[OCR] Lookup:', lookup.kind, lookup.suggestion || lookup.partNumber);
-            displayResult(lookup.partNumber, lookup.location, lookup.location ? null : ocrRaw, {
+            displayResult(lookup.partNumber, lookup.location, lookup.location ? null : formatOcrRawForDisplay(ocrRaw), {
                 suggestions: lookup.candidates
             });
 
@@ -939,12 +1017,17 @@ export async function scanPartNumber() {
                 saveToHistory(lookup.partNumber, lookup.location);
                 setOverlaySuccess();
             } else {
+                rememberScanForFeedback(lookup.kind, lookup.partNumber, ocrRaw, ocrResults, topAttempts);
                 setOverlayError();
             }
         } else {
             const ocrRawCleaned = (ocrRaw || '').trim();
             debugLog('[OCR] No normalized result. Raw OCR:', ocrRawCleaned || '(empty)');
-            showError(ocrErrorMessage(ocrErrorType || 'no_result'));
+            const errorType = ocrErrorType || 'no_result';
+            const glare = errorType === 'no_result' &&
+                topAttempts.some(a => (a.clippedRatio || 0) >= OCR.GLARE_HINT_RATIO);
+            showError(ocrErrorMessage(glare ? 'glare' : errorType));
+            rememberScanForFeedback('no_result', '', ocrRaw, ocrResults, topAttempts);
             setOverlayError();
         }
 
@@ -967,6 +1050,47 @@ export async function scanPartNumber() {
         }
         setOverlayError();
     }
+}
+
+// Keep what this scan saw, so a part number the user confirms next can be
+// stored as ground truth (see ocr-feedback.js). Only scans the model answered.
+function rememberScanForFeedback(kind, read, ocrRaw, ocrResults, topAttempts) {
+    const answered = ocrResults.filter(r => r && r.ocrResponse);
+    const sent = topAttempts[0];
+    if (!answered.length || !sent || !sent.base64) return;
+    setPendingOcrFeedback({
+        kind,
+        read: read || '',
+        raw: ocrRaw || '',
+        model: lastOcrModelUsed || '',
+        attemptModes: answered.map(r => r.attemptMode),
+        sharpness: Math.round(sent.sharpness || 0),
+        clippedRatio: Math.round((sent.clippedRatio || 0) * 1000) / 1000,
+        networkMs: lastOcrNetworkMs,
+        serverTimings: lastOcrServerTimings,
+        image: sent.base64
+    });
+}
+
+/**
+ * Parse a Server-Timing header into { name: { dur, desc } }. Metrics without a
+ * duration (such as "cold") get dur null.
+ */
+export function parseServerTiming(header) {
+    const timings = {};
+    for (const entry of String(header || '').split(',')) {
+        const [rawName, ...params] = entry.split(';').map(part => part.trim());
+        if (!rawName) continue;
+        const metric = { dur: null, desc: '' };
+        for (const param of params) {
+            const [key, ...rest] = param.split('=');
+            const value = rest.join('=').trim().replace(/^"(.*)"$/, '$1');
+            if (key.trim() === 'dur' && Number.isFinite(Number(value))) metric.dur = Number(value);
+            if (key.trim() === 'desc') metric.desc = value;
+        }
+        timings[rawName] = metric;
+    }
+    return timings;
 }
 
 async function performOCR(base64Image, controller, debugMeta, timeoutOverrideMs) {
@@ -1056,7 +1180,10 @@ async function performOCR(base64Image, controller, debugMeta, timeoutOverrideMs)
         providerUsed: lastOcrProviderUsed,
         providerFallbackUsed: lastOcrProviderFallbackUsed,
         modelUsed: lastOcrModelUsed,
-        fallbackUsed: lastOcrModelFallbackUsed
+        fallbackUsed: lastOcrModelFallbackUsed,
+        serverTiming: response.headers && typeof response.headers.get === 'function'
+            ? parseServerTiming(response.headers.get('Server-Timing'))
+            : null
     };
     return result;
 }
@@ -1065,7 +1192,9 @@ export function getLastOcrTimings() {
     return {
         ocrNetworkMs: lastOcrNetworkMs,
         ocrNetworkCalls: lastOcrNetworkCalls,
-        ocrPayloadBytes: lastOcrPayloadBytes
+        ocrPayloadBytes: lastOcrPayloadBytes,
+        // One parsed Server-Timing header per answered OCR call.
+        ocrServerTimings: lastOcrServerTimings
     };
 }
 

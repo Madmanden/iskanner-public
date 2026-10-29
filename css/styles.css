@@ -181,7 +181,7 @@ canvas {
     padding: 12px 14px;
     border: 1px solid var(--border);
     border-radius: 8px;
-    font-size: 15px;
+    font-size: 16px;
     font-family: 'Inter', sans-serif;
     font-weight: 500;
     outline: none;
@@ -653,6 +653,37 @@ button {
     cursor: pointer;
 }
 
+/* OCR alternatives are suggestions, not successful lookup results. */
+.ocr-suggestion-btn {
+    margin-top: 6px;
+    padding: 8px 10px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 40px;
+    text-align: left;
+}
+
+.ocr-suggestion-btn br {
+    display: none;
+}
+
+.ocr-suggestion-btn .result-location {
+    flex: 0 1 auto;
+    max-width: 48%;
+    padding: 0;
+    background: transparent;
+    border-radius: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.25;
+    letter-spacing: 0;
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+
 .suggestion-btn:active {
     opacity: 0.8;
 }
@@ -830,7 +861,7 @@ button {
     padding: 12px 14px;
     border: 1px solid var(--border);
     border-radius: 8px;
-    font-size: 15px;
+    font-size: 16px;
     font-family: inherit;
     background: var(--bg);
     color: var(--text);

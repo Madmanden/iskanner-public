@@ -47,7 +47,9 @@ export function isAllowedOrigin(origin, allowedOrigins, host) {
         }
     }
 
-    if (Array.isArray(allowedOrigins) && allowedOrigins.includes(origin)) return true;
+    if (Array.isArray(allowedOrigins) && allowedOrigins.includes(origin)) {
+        return true;
+    }
 
     return /^https:\/\/[a-z0-9-]+--iskanner\.netlify\.app$/.test(origin) ||
         /^https:\/\/iskanner\.netlify\.app$/.test(origin);
@@ -68,7 +70,10 @@ export function buildCorsHeaders(origin, allowedOrigins, host) {
 export function jsonResponse({ statusCode, corsHeaders, body }) {
     return {
         statusCode,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json'
+        },
         body: JSON.stringify(body)
     };
 }
@@ -80,7 +85,9 @@ export function getTokenSecret() {
 
 export function requireTokenSecret() {
     const secret = getTokenSecret();
-    if (!secret) throw new Error('AUTH_TOKEN_SECRET is not set');
+    if (!secret) {
+        throw new Error('AUTH_TOKEN_SECRET is not set');
+    }
     return secret;
 }
 
@@ -95,6 +102,7 @@ export function createToken({ expiresAt, secret } = {}) {
     const tokenSecret = secret || requireTokenSecret();
     const expiry = Number.isFinite(expiresAt) ? expiresAt : Date.now() + TOKEN_VALIDITY_MS;
     const payload = JSON.stringify({ exp: expiry });
+
     const hmac = crypto.createHmac('sha256', tokenSecret);
     hmac.update(payload);
     const signature = hmac.digest('base64url');
@@ -104,18 +112,24 @@ export function createToken({ expiresAt, secret } = {}) {
 
 export function verifyToken(token, secret = getTokenSecret()) {
     if (!secret || !token || typeof token !== 'string') return null;
+
     const parts = token.split('.');
     if (parts.length !== 2) return null;
+
     const [payloadBase64, signature] = parts;
     if (!payloadBase64 || !signature) return null;
 
     let payload;
-    try { payload = Buffer.from(payloadBase64, 'base64url').toString('utf8'); }
-    catch { return null; }
+    try {
+        payload = Buffer.from(payloadBase64, 'base64url').toString('utf8');
+    } catch {
+        return null;
+    }
 
     const hmac = crypto.createHmac('sha256', secret);
     hmac.update(payload);
     const expectedSignature = hmac.digest('base64url');
+
     if (!timingSafeEqualString(signature, expectedSignature)) return null;
 
     try {
@@ -126,3 +140,4 @@ export function verifyToken(token, secret = getTokenSecret()) {
         return null;
     }
 }
+

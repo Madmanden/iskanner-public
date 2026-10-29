@@ -2,6 +2,7 @@
 import { OVERLAY_FEEDBACK_MS, MAX_RECENT_LOOKUPS } from './config.js';
 import { escapeHtml, findClosestPartNumber, lookupLocation } from './utils.js';
 import { getToken } from './auth.js';
+import { reportOcrConfirmation } from './ocr-feedback.js';
 // State
 let overlayFeedbackTimeoutId = null;
 let lastReportTime = 0;
@@ -167,7 +168,7 @@ export function displayResult(partNumber, location, ocrRaw = null, options = {})
             if (suggestedLocation) {
                 displayResult(suggested, suggestedLocation);
                 setOverlaySuccess();
-                saveToHistory(suggested, suggestedLocation);
+                saveToHistory(suggested, suggestedLocation, ocrRawCleaned ? 'ocr_suggestion' : 'manual');
             }
         };
 
@@ -191,7 +192,7 @@ export function displayVoiceLookup(partNumber, originalTranscript = null) {
     if (!cleaned) {
         resultEl.innerHTML = `
             <div class="error">
-                Sig kun bogstaver og tal (og evt. punktum/bindestreg), fx BM067R eller 100.300.
+                Sig kun bogstaver og tal (og evt. punktum/bindestreg), fx XA901R eller 100.300.
             </div>
         `;
         setOverlayError();
@@ -212,7 +213,7 @@ export function displayVoiceLookup(partNumber, originalTranscript = null) {
         wireWrongLocationReportButton({ partNumber: cleaned, location, source: 'voice' });
         setOverlaySuccess();
         updateStatus('Fundet: ' + cleaned, 'ready');
-        saveToHistory(cleaned, location);
+        saveToHistory(cleaned, location, 'voice');
     } else {
         const suggestion = findClosestPartNumber(cleaned);
         resultEl.innerHTML = `
@@ -239,7 +240,7 @@ export function displayVoiceLookup(partNumber, originalTranscript = null) {
                     `;
                     setOverlaySuccess();
                     updateStatus('Fundet: ' + suggested, 'ready');
-                    saveToHistory(suggested, suggestedLocation);
+                    saveToHistory(suggested, suggestedLocation, 'voice');
                 }
             };
         }
@@ -319,18 +320,30 @@ export function setOverlaySuccess() {
     }, OVERLAY_FEEDBACK_MS);
 }
 
-function triggerSuccessHaptic() {
+function triggerHaptic(pattern) {
     try {
         if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
-        // Slightly more noticeable than a single short pulse.
-        navigator.vibrate([20, 30, 20]);
+        navigator.vibrate(pattern);
     } catch (e) {}
+}
+
+// Slightly more noticeable than a single short pulse.
+function triggerSuccessHaptic() {
+    triggerHaptic([20, 30, 20]);
+}
+
+// One long buzz, so failure is distinguishable from the short success double tap.
+function triggerErrorHaptic() {
+    triggerHaptic(180);
 }
 
 export function setOverlayError() {
     if (!overlayEl) return;
 
     if (!overlayFeedbackEnabled) return;
+
+    triggerErrorHaptic();
+
     overlayEl.classList.remove('scanning');
     overlayEl.classList.remove('success');
     overlayEl.classList.add('overlay-error');
@@ -353,7 +366,11 @@ export function clearOverlayFeedback() {
 }
 
 // History functions
-export function saveToHistory(partNumber, location) {
+// Every confirmed lookup passes through here; if it follows a scan without an
+// exact hit, it is also reported as that scan's correct answer (ocr-feedback.js).
+export function saveToHistory(partNumber, location, source = 'lookup') {
+    reportOcrConfirmation(partNumber, source);
+
     try {
         let history = JSON.parse(localStorage.getItem('recentLookups') || '[]');
         history = history.filter(h => h.partNumber !== partNumber);
@@ -567,7 +584,7 @@ export function displaySearchResults(searchResult) {
                 const result = results.find(r => r.partNumber === partNumber);
                 if (result) {
                     displayResult(partNumber, result.location);
-                    saveToHistory(partNumber, result.location);
+                    saveToHistory(partNumber, result.location, 'manual_search');
                     setOverlaySuccess();
                 }
             };

@@ -133,7 +133,7 @@ export function stopVoiceRecognition() {
 
     if (!recognition) return;
 
-    // Detach callbacks to prevent late events from updating UI after stop / a completed final result.
+    // Detach callbacks to prevent late events from updating UI after stop.
     // Keep onend attached so it can fire after abort()/stop() and clear
     // the listening UI (spinner, result div).
     try {

@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "netlify dev",
-    "build": "node scripts/sync-app-version.mjs && node scripts/build-parts-json.mjs && node scripts/bump-sw-version.mjs && echo 'No build step required'",
+    "build": "node scripts/sync-app-version.mjs && node scripts/check-parts-duplicates.mjs --strict && node scripts/build-parts-json.mjs && node scripts/bump-sw-version.mjs && echo 'No build step required'",
     "deploy": "netlify deploy --prod",
+    "check:parts": "node scripts/check-parts-duplicates.mjs --report docs/PARTS_DUPLICATES.md",
     "test": "bun test",
     "test:watch": "bun test --watch"
   },

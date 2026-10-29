@@ -22,8 +22,13 @@ export const handler = async (event) => {
     const host = getHeader(event.headers, 'host');
     const corsHeaders = buildCorsHeaders(origin, allowedOrigins, host);
 
+    // Handle CORS preflight
     if (event.httpMethod === 'OPTIONS') {
-        return { statusCode: 200, headers: corsHeaders, body: '' };
+        return {
+            statusCode: 200,
+            headers: corsHeaders,
+            body: ''
+        };
     }
 
     const tokenSecret = getTokenSecret();
@@ -41,41 +46,76 @@ export const handler = async (event) => {
         });
     }
 
+    // Only allow POST requests
     if (event.httpMethod !== 'POST') {
-        return jsonResponse({ statusCode: 405, corsHeaders, body: { error: 'Method not allowed' } });
+        return jsonResponse({
+            statusCode: 405,
+            corsHeaders,
+            body: { error: 'Method not allowed' }
+        });
     }
 
     try {
         const contentType = String(getHeader(event.headers, 'content-type') || '').toLowerCase();
         if (!contentType.includes('application/json')) {
-            return jsonResponse({ statusCode: 415, corsHeaders, body: { error: 'Unsupported Media Type. Use application/json.' } });
+            return jsonResponse({
+                statusCode: 415,
+                corsHeaders,
+                body: { error: 'Unsupported Media Type. Use application/json.' }
+            });
         }
 
         let payload;
         try {
             payload = JSON.parse(event.body || '');
         } catch {
-            return jsonResponse({ statusCode: 400, corsHeaders, body: { error: 'Invalid JSON body' } });
+            return jsonResponse({
+                statusCode: 400,
+                corsHeaders,
+                body: { error: 'Invalid JSON body' }
+            });
         }
 
         const { password } = payload;
+
         if (!password || typeof password !== 'string') {
-            return jsonResponse({ statusCode: 400, corsHeaders, body: { error: 'Password is required' } });
+            return jsonResponse({
+                statusCode: 400,
+                corsHeaders,
+                body: { error: 'Password is required' }
+            });
         }
 
+        // Validate password with constant-time comparison to avoid timing leaks
         if (!timingSafeEqualString(password, sharedPassword)) {
+            // Add a small delay to prevent brute force
             await new Promise(resolve => setTimeout(resolve, 1000));
-            return jsonResponse({ statusCode: 401, corsHeaders, body: { error: 'Invalid password' } });
+            return jsonResponse({
+                statusCode: 401,
+                corsHeaders,
+                body: { error: 'Invalid password' }
+            });
         }
-
+        
+        // Generate token
         const token = createToken({ secret: tokenSecret });
+
         return jsonResponse({
             statusCode: 200,
             corsHeaders,
-            body: { token, expiresIn: TOKEN_VALIDITY_MS, message: 'Authentication successful' }
+            body: {
+                token,
+                expiresIn: TOKEN_VALIDITY_MS,
+                message: 'Authentication successful'
+            }
         });
+
     } catch (error) {
         console.error('Auth function error:', error);
-        return jsonResponse({ statusCode: 500, corsHeaders, body: { error: 'Internal server error' } });
+        return jsonResponse({
+            statusCode: 500,
+            corsHeaders,
+            body: { error: 'Internal server error' }
+        });
     }
 };

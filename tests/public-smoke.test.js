@@ -4,7 +4,7 @@ import { smartSearchV2 } from '../js/search-v2.js';
 import { readFileSync } from 'node:fs';
 
 describe('sanitized public showcase', () => {
-  it('exposes the production database module contract with demo data', () => {
+  it('exposes the same database module contract as production', () => {
     expect(partsDatabase).toBe(namedPartsDatabase);
     expect(Object.keys(partsDatabase).length).toBe(12);
     expect(partsDatabase.DEMO001).toBe('Cabinet A, Drawer 1');
@@ -16,7 +16,7 @@ describe('sanitized public showcase', () => {
     expect(exact.exactMatch?.location).toBe('Cabinet A, Drawer 1');
   });
 
-  it('precaches current runtime and generated database', () => {
+  it('precaches the current runtime and generated database', () => {
     const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
     expect(sw).toContain('/parts-database.json');
     expect(sw).toContain('/js/order-mode.js');

@@ -16,7 +16,8 @@ The app replaces a slower desktop workflow: boot a PC, sign in to T-DOC, search 
 
 ## What it does
 
-- **Camera OCR** with preprocessing, bounded retries and database-aware correction.
+- **Camera OCR** with burst capture (sharpest frame wins), preprocessing, bounded retries, glare hints and database-aware correction.
+- **OCR feedback collection**: when a scan misses, the part number the user confirms next is stored with the scan crop in Netlify Blobs (capped per day), building ground truth for tuning OCR.
 - **Danish voice lookup** with live transcript feedback, conservative fuzzy resolution, explicit ambiguous candidates and local learning from repeated confirmed corrections.
 - **Manual lookup** with exact/fuzzy database matching.
 - **History** with sorting by recency, part number or location.
@@ -66,8 +67,9 @@ npm run build
 The public repository contains a sanitized smoke suite rather than production test fixtures. The build:
 
 1. syncs the user-visible version from `package.json`;
-2. generates `parts-database.json` from `parts-database.js`;
-3. gives the service-worker cache a unique build version.
+2. fails on part numbers listed twice with different locations;
+3. generates `parts-database.json` from `parts-database.js`;
+4. gives the service-worker cache a unique build version.
 
 ## Deployment
 
@@ -94,6 +96,7 @@ Optional variables include `HYPERBOLIC_API_KEY`, provider/model overrides, `ALLO
 │   ├── camera.js
 │   ├── config.js
 │   ├── ocr.js
+│   ├── ocr-feedback.js
 │   ├── ocr-selection.js
 │   ├── ocr-lookup.js
 │   ├── order-mode.js
@@ -106,9 +109,11 @@ Optional variables include `HYPERBOLIC_API_KEY`, provider/model overrides, `ALLO
 │   ├── lib/shared.js
 │   ├── auth.js
 │   ├── ocr.js
+│   ├── ocr-feedback.js
 │   └── ocr-usage.js
 ├── scripts/
 ├── tests/public-smoke.test.js
+├── screenshots/instrumentskanner.jpg
 ├── parts-database.js
 ├── parts-database.json
 ├── manifest.json

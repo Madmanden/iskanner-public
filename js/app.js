@@ -244,7 +244,7 @@ function init() {
             // Exact match found
             const { partNumber: foundPart, location } = searchResult.exactMatch;
             displayResult(foundPart, location);
-            saveToHistory(foundPart, location);
+            saveToHistory(foundPart, location, 'manual');
             setOverlaySuccess();
             updateStatus('Fundet: ' + foundPart, 'ready');
         } else if (searchResult.results && searchResult.results.length > 0) {
